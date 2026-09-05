@@ -12,7 +12,7 @@ Honesty guards (awesome-quant: honest-signals + purgedcv concepts):
 
 Usage:
   python scripts/backtest.py --style intraday
-  python scripts/backtest.py --style scalping --pair BTCUSDT --refresh
+  python scripts/backtest.py --style scalping --pair BTCUSD --refresh
 """
 import argparse
 import json
@@ -36,7 +36,7 @@ from app.data.provider import BinanceProvider, YahooProvider  # noqa: E402
 CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache")
 
 SEEDS = (
-    ("BTCUSDT", constants.KIND_CRYPTO),
+    ("BTCUSD", constants.KIND_CRYPTO),
     ("EURUSD", constants.KIND_FOREX),
     ("AAPL", constants.KIND_STOCK),
     ("XAUUSD", constants.KIND_CFD),
@@ -70,13 +70,14 @@ def _save_cache(path, candles):
 
 def _fetch_binance(pair, interval, days):
     prov = BinanceProvider()
+    venue = constants.binance_symbol(pair)
     step_ms = constants.INTERVALS[interval] * 1000
     end_ms = int(time.time() * 1000)
     start_ms = end_ms - int(days * 86400 * 1000)
     out, cursor = [], start_ms
     while True:
         chunk = prov._get("/api/v3/klines", {
-            "symbol": pair, "interval": interval, "limit": 1000,
+            "symbol": venue, "interval": interval, "limit": 1000,
             "startTime": cursor,
         })
         if not chunk:

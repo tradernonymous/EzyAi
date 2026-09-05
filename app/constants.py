@@ -129,11 +129,11 @@ SIGNAL_GATES = {
 }
 
 CRYPTO_UNIVERSE = [
-    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT",
-    "DOGEUSDT", "AVAXUSDT", "LINKUSDT", "LTCUSDT", "DOTUSDT", "TRXUSDT",
-    "ATOMUSDT", "NEARUSDT", "ARBUSDT", "OPUSDT", "INJUSDT", "SUIUSDT",
-    "APTUSDT", "FILUSDT", "PEPEUSDT", "SHIBUSDT", "ENAUSDT", "ONDOUSDT",
-    "AAVEUSDT", "UNIUSDT", "XLMUSDT", "VETUSDT", "ICPUSDT", "HBARUSDT",
+    "BTCUSD", "ETHUSD", "BNBUSD", "SOLUSD", "XRPUSD", "ADAUSD",
+    "DOGEUSD", "AVAXUSD", "LINKUSD", "LTCUSD", "DOTUSD", "TRXUSD",
+    "ATOMUSD", "NEARUSD", "ARBUSD", "OPUSD", "INJUSD", "SUIUSD",
+    "APTUSD", "FILUSD", "PEPEUSD", "SHIBUSD", "ENAUSD", "ONDOUSD",
+    "AAVEUSD", "UNIUSD", "XLMUSD", "VETUSD", "ICPUSD", "HBARUSD",
 ]
 
 FX_UNIVERSE = {
@@ -189,51 +189,75 @@ ALL_UNIVERSE = (
 )
 
 CRYPTO_REVERSE_URL = {
-    "BTCUSDT": "https://www.blockchain.com/explorer/transactions/btc",
-    "ETHUSDT": "https://etherscan.io",
-    "BNBUSDT": "https://bscscan.com",
-    "SOLUSDT": "https://solscan.io",
-    "XRPUSDT": "https://xrpscan.com",
-    "ADAUSDT": "https://cardanoscan.io",
-    "DOGEUSDT": "https://dogechain.info",
-    "AVAXUSDT": "https://snowtrace.io",
-    "LINKUSDT": "https://linkpool.io",
-    "LTCUSDT": "https://litecoinspace.org",
-    "TRXUSDT": "https://tronscan.org",
-    "SUIUSDT": "https://suiscan.xyz",
-    "ARBUSDT": "https://arbiscan.io",
-    "OPUSDT": "https://optimistic.etherscan.io",
+    "BTCUSD": "https://www.blockchain.com/explorer/transactions/btc",
+    "ETHUSD": "https://etherscan.io",
+    "BNBUSD": "https://bscscan.com",
+    "SOLUSD": "https://solscan.io",
+    "XRPUSD": "https://xrpscan.com",
+    "ADAUSD": "https://cardanoscan.io",
+    "DOGEUSD": "https://dogechain.info",
+    "AVAXUSD": "https://snowtrace.io",
+    "LINKUSD": "https://linkpool.io",
+    "LTCUSD": "https://litecoinspace.org",
+    "TRXUSD": "https://tronscan.org",
+    "SUIUSD": "https://suiscan.xyz",
+    "ARBUSD": "https://arbiscan.io",
+    "OPUSD": "https://optimistic.etherscan.io",
 }
 
 COINGECKO_IDS = {
-    "BTCUSDT": "bitcoin",
-    "ETHUSDT": "ethereum",
-    "BNBUSDT": "binancecoin",
-    "SOLUSDT": "solana",
-    "XRPUSDT": "ripple",
-    "ADAUSDT": "cardano",
-    "DOGEUSDT": "dogecoin",
-    "AVAXUSDT": "avalanche-2",
-    "LINKUSDT": "chainlink",
-    "LTCUSDT": "litecoin",
-    "DOTUSDT": "polkadot",
-    "TRXUSDT": "tron",
-    "ATOMUSDT": "cosmos",
-    "NEARUSDT": "near",
-    "ARBUSDT": "arbitrum",
-    "OPUSDT": "optimism",
-    "INJUSDT": "injective-protocol",
-    "SUIUSDT": "sui",
-    "APTUSDT": "aptos",
-    "FILUSDT": "filecoin",
-    "PEPEUSDT": "pepe",
-    "SHIBUSDT": "shiba-inu",
-    "ENAUSDT": "ethena",
-    "ONDOUSDT": "ondo-finance",
-    "AAVEUSDT": "aave",
-    "UNIUSDT": "uniswap",
-    "XLMUSDT": "stellar",
-    "VETUSDT": "vechain",
-    "ICPUSDT": "internet-computer",
-    "HBARUSDT": "hedera-hashgraph",
+    "BTCUSD": "bitcoin",
+    "ETHUSD": "ethereum",
+    "BNBUSD": "binancecoin",
+    "SOLUSD": "solana",
+    "XRPUSD": "ripple",
+    "ADAUSD": "cardano",
+    "DOGEUSD": "dogecoin",
+    "AVAXUSD": "avalanche-2",
+    "LINKUSD": "chainlink",
+    "LTCUSD": "litecoin",
+    "DOTUSD": "polkadot",
+    "TRXUSD": "tron",
+    "ATOMUSD": "cosmos",
+    "NEARUSD": "near",
+    "ARBUSD": "arbitrum",
+    "OPUSD": "optimism",
+    "INJUSD": "injective-protocol",
+    "SUIUSD": "sui",
+    "APTUSD": "aptos",
+    "FILUSD": "filecoin",
+    "PEPEUSD": "pepe",
+    "SHIBUSD": "shiba-inu",
+    "ENAUSD": "ethena",
+    "ONDOUSD": "ondo-finance",
+    "AAVEUSD": "aave",
+    "UNIUSD": "uniswap",
+    "XLMUSD": "stellar",
+    "VETUSD": "vechain",
+    "ICPUSD": "internet-computer",
+    "HBARUSD": "hedera-hashgraph",
 }
+
+# Legacy pre-rename aliases (state.json watches / typed input may still use
+# venue-style USDT symbols). Both spellings resolve to the same asset.
+for _usd, _cid in list(COINGECKO_IDS.items()):
+    COINGECKO_IDS.setdefault(_usd.replace("USD", "USDT"), _cid)
+for _usd, _url in list(CRYPTO_REVERSE_URL.items()):
+    CRYPTO_REVERSE_URL.setdefault(_usd.replace("USD", "USDT"), _url)
+
+
+def base_asset(symbol):
+    """BTCUSD or BTCUSDT -> BTC. Non-crypto symbols pass through."""
+    s = symbol.upper()
+    if s.endswith("USDT"):
+        return s[:-4]
+    if s.endswith("USDC"):
+        return s[:-4]
+    if s in CRYPTO_UNIVERSE:
+        return s[:-3]
+    return s
+
+
+def binance_symbol(symbol):
+    """Display/legacy crypto spelling -> Binance venue symbol (always USDT)."""
+    return base_asset(symbol) + "USDT"

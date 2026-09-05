@@ -43,8 +43,9 @@ def fake_ccxt(monkeypatch):
 
 
 def test_symbol_mapping():
-    assert CcxtProvider.to_ccxt_symbol("BTCUSDT") == "BTC/USDT"
-    assert CcxtProvider.to_ccxt_symbol("ethusdt") == "ETH/USDT"
+    assert CcxtProvider.to_ccxt_symbol("BTCUSD") == "BTC/USDT"
+    assert CcxtProvider.to_ccxt_symbol("BTCUSDT") == "BTC/USDT"  # legacy
+    assert CcxtProvider.to_ccxt_symbol("ethusd") == "ETH/USDT"
     assert CcxtProvider.to_ccxt_symbol("BTCUSDC") == "BTC/USDC"
 
 
@@ -60,7 +61,7 @@ def test_klines_fallback_to_ccxt(fake_ccxt, monkeypatch):
     monkeypatch.setattr(hub.binance, "fetch_klines",
                         lambda *a, **k: (_ for _ in ()).throw(IOError("down")))
     monkeypatch.setattr(hub.binance, "validate", lambda s: True)
-    candles = hub.fetch_klines("BTCUSDT", "15m", 2)
+    candles = hub.fetch_klines("BTCUSD", "15m", 2)
     assert len(candles) == 2
     assert candles[-1]["close"] == 60600.0
     assert hub.mode == "live"
@@ -71,9 +72,9 @@ def test_ticker_fallback_to_ccxt(fake_ccxt, monkeypatch):
     monkeypatch.setattr(hub.binance, "fetch_ticker",
                         lambda *a, **k: (_ for _ in ()).throw(IOError("down")))
     monkeypatch.setattr(hub.binance, "validate", lambda s: True)
-    tick = hub.fetch_ticker("BTCUSDT")
+    tick = hub.fetch_ticker("BTCUSD")
     assert tick["price"] == 60600.0
-    assert tick["symbol"] == "BTCUSDT"
+    assert tick["symbol"] == "BTCUSD"
     assert hub.mode == "live"
 
 
@@ -84,7 +85,7 @@ def test_ccxt_failure_falls_to_demo(fake_ccxt, monkeypatch):
     monkeypatch.setattr(hub.binance, "validate", lambda s: True)
     monkeypatch.setattr(hub.ccxt, "fetch_klines",
                         lambda *a, **k: (_ for _ in ()).throw(IOError("down")))
-    candles = hub.fetch_klines("BTCUSDT", "15m", 5)
+    candles = hub.fetch_klines("BTCUSD", "15m", 5)
     assert len(candles) == 5
     assert hub.mode == "demo"
 
@@ -97,7 +98,7 @@ def test_ccxt_failure_raises_without_demo(fake_ccxt, monkeypatch):
     monkeypatch.setattr(hub.ccxt, "fetch_klines",
                         lambda *a, **k: (_ for _ in ()).throw(IOError("down")))
     with pytest.raises(IOError):
-        hub.fetch_klines("BTCUSDT", "15m", 5)
+        hub.fetch_klines("BTCUSD", "15m", 5)
 
 
 def test_non_crypto_skips_ccxt(monkeypatch):

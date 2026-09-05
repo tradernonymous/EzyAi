@@ -69,7 +69,7 @@ class BinanceProvider:
             "low": float(t["lowPrice"]),
             "volume": float(t["quoteVolume"]),
             "kind": constants.KIND_CRYPTO,
-            "asset": symbol.replace("USDT", ""),
+            "asset": constants.base_asset(symbol),
             "quote": "USDT",
         }
 
@@ -189,12 +189,9 @@ class CcxtProvider:
 
     @staticmethod
     def to_ccxt_symbol(symbol):
-        s = symbol.upper()
-        if s.endswith("USDT"):
-            return s[:-4] + "/USDT"
-        if s.endswith("USDC"):
-            return s[:-4] + "/USDC"
-        return s
+        if symbol.upper().endswith("USDC"):
+            return constants.base_asset(symbol) + "/USDC"
+        return constants.base_asset(symbol) + "/USDT"
 
     def _exchange(self, ccxt_mod, name):
         cls = getattr(ccxt_mod, name)
@@ -235,8 +232,8 @@ class CcxtProvider:
             "low": float(t.get("low") or last),
             "volume": float(t.get("quoteVolume") or t.get("baseVolume") or 0.0),
             "kind": constants.KIND_CRYPTO,
-            "asset": symbol.upper().replace("USDT", "").replace("USDC", ""),
-            "quote": "USDC" if symbol.upper().endswith("USDC") else "USDT",
+            "asset": constants.base_asset(symbol),
+            "quote": "USDT",
         }
 
 
@@ -257,7 +254,7 @@ class SyntheticProvider:
             "AAPL": 210.0, "MSFT": 430.0, "GOOGL": 175.0, "AMZN": 185.0,
             "NVDA": 130.0, "TSLA": 250.0, "SPY": 550.0, "QQQ": 470.0,
         }
-        key = symbol.replace("USDT", "").replace("=X", "")
+        key = constants.base_asset(symbol).replace("=X", "")
         return mapping.get(key, 50.0 + self._seed(symbol, "x") % 450)
 
     def validate(self, symbol):
@@ -292,7 +289,7 @@ class SyntheticProvider:
         last = candles[-1]["close"]
         prev = candles[0]["close"]
         chg = (last - prev) / prev * 100 if prev else 0.0
-        asset = symbol.replace("USDT", "").replace("=X", "")
+        asset = constants.base_asset(symbol).replace("=X", "")
         return {
             "price": last,
             "change_pct": chg,
@@ -332,7 +329,7 @@ class DataHub:
     def resolve(self, symbol):
         kind = self.classify(symbol.upper())
         if kind == constants.KIND_CRYPTO:
-            return kind, symbol.upper()
+            return kind, constants.binance_symbol(symbol.upper())
         if kind == constants.KIND_CFD:
             return kind, constants.CFD_UNIVERSE[symbol.upper()]
         if kind == constants.KIND_FOREX:
@@ -345,6 +342,15 @@ class DataHub:
         kind, sym = self.resolve(symbol)
         if kind:
             return kind, sym
+        s = symbol.upper()
+        # friendly USD spelling for listings outside the universe
+        if s.endswith("USD") and not s.endswith(("USDT", "USDC")):
+            venue = constants.binance_symbol(s)
+            try:
+                if self.binance.validate(venue):
+                    return constants.KIND_CRYPTO, venue
+            except Exception:
+                pass
         try:
             if self.binance.validate(symbol.upper()):
                 return constants.KIND_CRYPTO, symbol.upper()

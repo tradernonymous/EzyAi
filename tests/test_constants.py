@@ -36,7 +36,7 @@ def test_universes_nonempty():
     assert constants.FX_UNIVERSE
     assert constants.STOCK_UNIVERSE
     assert constants.CFD_UNIVERSE
-    assert all(s.endswith("USDT") for s in constants.CRYPTO_UNIVERSE)
+    assert all(s.endswith("USD") and not s.endswith("USDT") for s in constants.CRYPTO_UNIVERSE)
     assert all(len(s) == 6 for s in constants.FX_UNIVERSE)
 
 
@@ -58,3 +58,21 @@ def test_cfd_classified():
     kind, sym = hub.resolve("XAUUSD")
     assert kind == constants.KIND_CFD
     assert sym == "GC=F"
+
+
+def test_crypto_usd_spelling_with_venue_mapping():
+    from app.data.provider import DataHub
+    hub = DataHub()
+    assert hub.classify("BTCUSD") == constants.KIND_CRYPTO
+    kind, sym = hub.resolve("BTCUSD")
+    assert kind == constants.KIND_CRYPTO
+    assert sym == "BTCUSDT"  # Binance venue symbol
+    # legacy venue spelling keeps working (old state.json watches, typed input)
+    assert hub.classify("BTCUSDT") == constants.KIND_CRYPTO
+    assert hub.resolve("BTCUSDT") == (constants.KIND_CRYPTO, "BTCUSDT")
+    # ...without confusing forex pairs
+    assert hub.classify("EURUSD") == constants.KIND_FOREX
+    assert constants.base_asset("BTCUSD") == "BTC"
+    assert constants.base_asset("BTCUSDT") == "BTC"
+    assert constants.base_asset("EURUSD") == "EURUSD"
+    assert constants.binance_symbol("BTCUSD") == "BTCUSDT"

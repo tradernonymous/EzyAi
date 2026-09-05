@@ -27,11 +27,12 @@ class Fundamentals:
         cid = constants.COINGECKO_IDS.get(pair)
         if cid:
             return cid
+        asset = constants.base_asset(pair)
         try:
-            search = self._get(f"{self.CG}/search", {"query": pair.replace("USDT", "")})
+            search = self._get(f"{self.CG}/search", {"query": asset})
             coins = search.get("coins", [])
             for c in coins:
-                if c.get("symbol", "").upper() == pair.replace("USDT", ""):
+                if c.get("symbol", "").upper() == asset:
                     return c["id"]
             if coins:
                 return coins[0]["id"]
@@ -176,12 +177,13 @@ class Fundamentals:
         s = symbol.upper()
         out = []
         if kind == constants.KIND_CRYPTO:
-            asset = s.replace("USDT", "")
+            asset = constants.base_asset(s)
+            venue = constants.binance_symbol(s)
             out += [
                 ("CoinGecko", f"https://www.coingecko.com/en/coins/{asset.lower()}"),
                 ("CoinMarketCap", f"https://coinmarketcap.com/currencies/{asset.lower()}/"),
-                ("Binance", f"https://www.binance.com/en/trade/{s}"),
-                ("TradingView", f"https://www.tradingview.com/chart/?symbol=BINANCE%3A{s}"),
+                ("Binance", f"https://www.binance.com/en/trade/{venue}"),
+                ("TradingView", f"https://www.tradingview.com/chart/?symbol=BINANCE%3A{venue}"),
             ]
             explorer = constants.CRYPTO_REVERSE_URL.get(s)
             if explorer:

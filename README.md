@@ -32,7 +32,7 @@ follow-ups (Watch / Fundamentals / Quote) on every result.
 
 | Market | Provider | Examples |
 | --- | --- | --- |
-| Crypto | Binance public API (multi-host) → ccxt fallback (Kraken/Coinbase, no key) | `BTCUSDT`, `ETHUSDT`, `SOLUSDT` |
+| Crypto | Binance public API (multi-host) → ccxt fallback (Kraken/Coinbase, no key) | `BTCUSD`, `ETHUSD`, `SOLUSD` |
 | Forex | Yahoo Finance chart API | `EURUSD`, `GBPUSD`, `USDJPY` |
 | Stocks / ETFs | Yahoo Finance chart API | `AAPL`, `TSLA`, `SPY`, `QQQ` |
 | Metals / energy / indices (CFD-style) | Yahoo Finance chart API | `XAUUSD`, `XAGUSD`, `WTI`, `US30`, `NAS100`, `SPX500` |
@@ -54,14 +54,14 @@ python main.py
 ## Usage examples
 
 ```
-/analyze BTCUSDT        → then pick a timeframe
+/analyze BTCUSD        → then pick style + risk mode (buttons guide you)
 /watch EURUSD intraday safe
 /watch AAPL swing aggressive
 /unwatch EURUSD
-/fundamentals SOLUSDT
+/fundamentals SOLUSD
 /autopilot scalping aggressive
 /stopautopilot
-/quote ETHUSDT
+/quote ETHUSD
 ```
 
 ## Project layout

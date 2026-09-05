@@ -40,7 +40,7 @@ def test_commands_cover_every_function():
 
 def test_callback_round_trips():
     cases = [
-        ui.cb_menu("analyze"), ui.cb_menu("watch", "BTCUSDT"),
+        ui.cb_menu("analyze"), ui.cb_menu("watch", "BTCUSD"),
         ui.cb_ppage("fund", 3), ui.cb_pick("quote", "XAUUSD"),
         ui.cb_pick("analyze", "custom"), ui.cb_style("watch", "swing"),
         ui.cb_mode("auto", "aggressive"), ui.cb_back("analyze", "pair"),
@@ -52,8 +52,8 @@ def test_callback_round_trips():
         assert len(data) <= 64, data
         parsed = ui.parse_callback(data)
         assert parsed["a"] != "unknown", data
-    assert ui.parse_callback("ezy:menu:watch:BTCUSDT") == {
-        "a": "menu", "flow": "watch", "pair": "BTCUSDT"}
+    assert ui.parse_callback("ezy:menu:watch:BTCUSD") == {
+        "a": "menu", "flow": "watch", "pair": "BTCUSD"}
     assert ui.parse_callback("ezy:style:auto:intraday") == {
         "a": "style", "flow": "auto", "style": "intraday"}
     assert ui.parse_callback("junk")["a"] == "unknown"
@@ -88,20 +88,41 @@ def test_style_mode_keyboards_cover_options():
     assert "ezy:back:watch:style" in _callbacks(mkb)
 
 
+def test_back_buttons_and_main_menu_everywhere():
+    assert ui.MENU_DASH in ui.MENU_LABELS  # main menu button exists
+    assert ui.route_menu(ui.MENU_DASH) == "dash"
+    # pair picker carries a menu escape hatch, not just cancel
+    cbs = _callbacks(ui.pair_keyboard("analyze", 0))
+    assert "ezy:menu:dash" in cbs
+    assert "ezy:cancel" in cbs
+    # autopilot has no pair step: its style Back goes to the menu
+    auto_cbs = _callbacks(ui.style_keyboard("auto"))
+    assert "ezy:menu:dash" in auto_cbs
+    assert not any(c.startswith("ezy:back:auto:") for c in auto_cbs)
+    # custom-symbol prompt has Back + Cancel
+    custom_cbs = _callbacks(ui.custom_pair_keyboard("analyze"))
+    assert "ezy:menu:analyze" in custom_cbs
+    assert "ezy:cancel" in custom_cbs
+    # every guided flow's keyboards carry cancel
+    for kb in (ui.style_keyboard("watch"), ui.mode_keyboard("watch"),
+               ui.confirm_keyboard("ezy:watch_go", "ezy:back:watch:mode")):
+        assert "ezy:cancel" in _callbacks(kb)
+
+
 def test_followup_carries_pair():
-    cbs = _callbacks(ui.followup_keyboard("BTCUSDT"))
-    assert "ezy:menu:watch:BTCUSDT" in cbs
-    assert "ezy:menu:fund:BTCUSDT" in cbs
-    assert "ezy:menu:quote:BTCUSDT" in cbs
+    cbs = _callbacks(ui.followup_keyboard("BTCUSD"))
+    assert "ezy:menu:watch:BTCUSD" in cbs
+    assert "ezy:menu:fund:BTCUSD" in cbs
+    assert "ezy:menu:quote:BTCUSD" in cbs
 
 
 def test_watches_keyboard_per_row_buttons():
-    rows = [{"pair": "BTCUSDT", "style": "intraday", "mode": "normal",
+    rows = [{"pair": "BTCUSD", "style": "intraday", "mode": "normal",
              "last_signal_ts": 1},
             {"pair": "XAUUSD", "style": "swing", "mode": "safe",
              "last_signal_ts": 0}]
     cbs = _callbacks(ui.watches_keyboard(rows))
-    assert "ezy:unwatch:BTCUSDT" in cbs
+    assert "ezy:unwatch:BTCUSD" in cbs
     assert "ezy:unwatch:XAUUSD" in cbs
     assert "ezy:menu:watch" in cbs
 
@@ -121,9 +142,9 @@ def test_flow_prompts_reference_steps():
         text, kb = ui.prompt_pair(flow)
         assert "step 1/3" in text
         assert kb is not None
-    text, kb = ui.prompt_style("analyze", "BTCUSDT")
-    assert "BTCUSDT" in text and "step 2/3" in text
-    text, kb = ui.prompt_mode("analyze", "BTCUSDT", "intraday")
+    text, kb = ui.prompt_style("analyze", "BTCUSD")
+    assert "BTCUSD" in text and "step 2/3" in text
+    text, kb = ui.prompt_mode("analyze", "BTCUSD", "intraday")
     assert "intraday" in text and "step 3/3" in text
 
 
@@ -133,16 +154,16 @@ class _Pilot:
 
 
 def test_dashboard_view_states():
-    watches = [{"pair": "BTCUSDT", "style": "intraday", "mode": "normal"}]
+    watches = [{"pair": "BTCUSD", "style": "intraday", "mode": "normal"}]
     on = msg.dashboard_view(watches, _Pilot(), "live")
-    assert "BTCUSDT" in on and "ON" in on and "live" in on
+    assert "BTCUSD" in on and "ON" in on and "live" in on
     off = msg.dashboard_view([], None, "live")
     assert "off" in off and "0" in off
 
 
 def test_confirm_texts_carry_risk():
-    t = msg.confirm_watch_text("BTCUSDT", "intraday", "normal", 300, 2.0, 1.0)
-    assert "BTCUSDT" in t and "300" in t and "1.0%" in t
+    t = msg.confirm_watch_text("BTCUSD", "intraday", "normal", 300, 2.0, 1.0)
+    assert "BTCUSD" in t and "300" in t and "1.0%" in t
     t = msg.confirm_auto_text("swing", "safe", 3)
     assert "swing/safe" in t and "3" in t
     assert "autopilot" in msg.auto_started_text("intraday", "normal").lower()

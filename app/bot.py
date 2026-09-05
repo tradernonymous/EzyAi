@@ -107,11 +107,15 @@ class Bot:
 
     async def cmd_start(self, update, ctx):
         ctx.user_data.pop(self._flow_key(), None)
+        # Anchor the persistent button menu first so it is never hidden,
+        # then the welcome card with shortcut buttons.
         await self._reply(
             update,
-            "\U0001f44b Welcome to <b>EzyAi</b> \u2014 live market analysis, "
+            "\U0001f44b Tap a button below \u2014 this menu stays on every screen.")
+        await self._reply(
+            update,
+            "Welcome to <b>EzyAi</b> \u2014 live market analysis, "
             "alerts and auto signals.\n"
-            "Use the buttons below (always here) or the menu commands.\n"
             "Tap <b>Analyze</b> to run your first scan.",
             reply_markup=ui.help_keyboard())
 
@@ -156,10 +160,10 @@ class Bot:
             await self._edit_or_send(query, status)
         else:
             await self._reply(update, status)
-        try:
-            headlines = self.fund.news(pair.replace("USDT", ""), limit=5)
-        except Exception:
-            headlines = []
+            try:
+                headlines = self.fund.news(constants.base_asset(pair), limit=5)
+            except Exception:
+                headlines = []
         try:
             score = _sent.score_headlines(headlines)
         except Exception:
@@ -239,7 +243,7 @@ class Bot:
         links = self.fund.links(kind, pair)
         text += "\n" + msg.links_block(links)
         try:
-            news = self.fund.news(pair.replace("USDT", ""))
+            news = self.fund.news(constants.base_asset(pair))
         except Exception:
             news = []
         if news:
@@ -463,7 +467,8 @@ class Bot:
             if pair == "custom":
                 ctx.user_data[self._flow_key()]["step"] = "custom_pair"
                 await self._edit_or_send(
-                    query, "Send the symbol (e.g. BTCUSDT, EURUSD, AAPL):")
+                    query, "Send the symbol (e.g. BTCUSD, EURUSD, AAPL):",
+                    ui.custom_pair_keyboard(flow_name))
                 return
             if not self.hub.resolve_loose(pair):
                 await self._edit_or_send(query, f"Unknown symbol <b>{pair}</b>.",

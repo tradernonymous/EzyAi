@@ -28,7 +28,7 @@ MENU_WATCH = "\U0001f440 Watchlist"
 MENU_AUTO = "\U0001f916 Autopilot"
 MENU_QUOTE = "\U0001f4b9 Quote"
 MENU_FUND = "\U0001f4da Fundamentals"
-MENU_DASH = "\U0001f4cb Dashboard"
+MENU_DASH = "\U0001f3e0 Main Menu"
 MENU_HELP = "\u2753 Help"
 
 MENU_LABELS = (MENU_ANALYZE, MENU_WATCH, MENU_AUTO, MENU_QUOTE,
@@ -171,15 +171,27 @@ def pair_keyboard(flow, page=0, pool=None):
         nav.append(InlineKeyboardButton(f"Next \u276f {page + 1}/{pages}",
                                         callback_data=cb_ppage(flow, page + 1)))
     rows.append(nav)
-    rows.append([InlineKeyboardButton("\u2715 Cancel", callback_data="ezy:cancel")])
+    rows.append([InlineKeyboardButton("\U0001f3e0 Menu", callback_data=cb_menu("dash")),
+                 InlineKeyboardButton("\u2715 Cancel", callback_data="ezy:cancel")])
     return InlineKeyboardMarkup(rows)
+
+
+def custom_pair_keyboard(flow):
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("\u2039 Back", callback_data=cb_menu(flow)),
+        InlineKeyboardButton("\u2715 Cancel", callback_data="ezy:cancel"),
+    ]])
 
 
 def style_keyboard(flow):
     rows = [[InlineKeyboardButton(
         f"{STYLE_EMOJI[s]} {s.capitalize()} ({STYLE_HINT[s]})",
         callback_data=cb_style(flow, s))] for s in constants.STYLES]
-    rows.append([InlineKeyboardButton("\u2039 Back", callback_data=cb_back(flow, "pair")),
+    # autopilot has no pair step: its Back goes to the main menu instead
+    back = (InlineKeyboardButton("\U0001f3e0 Menu", callback_data=cb_menu("dash"))
+            if flow == "auto" else
+            InlineKeyboardButton("\u2039 Back", callback_data=cb_back(flow, "pair")))
+    rows.append([back,
                  InlineKeyboardButton("\u2715 Cancel", callback_data="ezy:cancel")])
     return InlineKeyboardMarkup(rows)
 

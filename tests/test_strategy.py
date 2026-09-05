@@ -38,14 +38,14 @@ def test_analyze_output_shape():
 
 def test_spec_risk_positive_distance():
     hub = make_hub()
-    a = strat.analyze("BTCUSDT", "intraday", "normal", hub)
+    a = strat.analyze("BTCUSD", "intraday", "normal", hub)
     if a["spec"]:
         assert abs(a["spec"]["tp1"] - a["spec"]["market"]) > 0
 
 
 def test_engine_accepts_high_confidence_long():
     analysis = {
-        "pair": "BTCUSDT", "side": "long", "style": "intraday", "mode": "safe",
+        "pair": "BTCUSD", "side": "long", "style": "intraday", "mode": "safe",
         "base_tf": "15m", "confidence": 90.0,
         "reasons": ["test"], "exit_notes": ["x"], "hold_horizon": "hours",
         "levels": {"support": [1], "resistance": [2]},
@@ -72,7 +72,7 @@ def test_engine_rejects_neutral():
 
 def test_engine_gate_respects_confidence():
     base = {
-        "pair": "BTCUSDT", "side": "long", "style": "intraday", "mode": "normal",
+        "pair": "BTCUSD", "side": "long", "style": "intraday", "mode": "normal",
         "base_tf": "15m", "confidence": 1.0, "reasons": [], "exit_notes": [],
         "hold_horizon": "hours", "levels": {"support": [], "resistance": []},
         "spec": {"market": 100, "limit": 99, "zone_low": 99, "zone_high": 100,
@@ -100,7 +100,7 @@ def test_autopilot_respects_daily_limit():
 
 def test_engine_safe_requires_macd_confirmation():
     base = {
-        "pair": "BTCUSDT", "side": "long", "mode": "safe",
+        "pair": "BTCUSD", "side": "long", "mode": "safe",
         "style": "intraday", "base_tf": "15m", "confidence": 90.0,
         "reasons": [], "exit_notes": [], "hold_horizon": "hours",
         "levels": {"support": [], "resistance": []},

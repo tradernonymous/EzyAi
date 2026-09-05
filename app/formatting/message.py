@@ -114,7 +114,7 @@ def fundamentals_report(kind, symbol, data, hub_mode):
     lines = [f"\U0001f4ca <b>FUNDAMENTALS</b> \u2014 {e(symbol.upper())}"]
     if data is None:
         lines.append("Fundamentals feed unavailable right now \u2014 showing cached/derived data.")
-        idx = symbol.replace("USDT", "")
+        idx = constants.base_asset(symbol)
         lines.append(f"Asset: {e(idx)}")
     elif kind == constants.KIND_CRYPTO:
         lines.append(f"Name: {e(data.get('name', '-'))} \u00b7 Rank #{data.get('rank', '-')} \u00b7 Data: {hub_mode}")
@@ -269,6 +269,6 @@ def help_text():
         "/stopautopilot \u2014 stop random signals\n"
         "/quote PAIR \u2014 quick live price\n"
         "/help \u2014 this message\n\n"
-        "Examples: crypto BTCUSDT \u00b7 forex EURUSD \u00b7 stock AAPL \u00b7 cfd XAUUSD\n"
+        "Examples: crypto BTCUSD \u00b7 forex EURUSD \u00b7 stock AAPL \u00b7 cfd XAUUSD\n"
         "Modes affect frequency and risk: safe (fewer, tighter), aggressive (more, wider)."
     )

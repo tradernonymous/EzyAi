@@ -126,7 +126,7 @@ class _Hub:
 def test_analyze_carries_confluence_block():
     closes = [100.0 + i * 0.05 + (i % 5) for i in range(150)]
     candles = [_c(c, c * 1.001, c * 0.999, c, ts=i * 900000) for i, c in enumerate(closes)]
-    a = strat.analyze("BTCUSDT", "intraday", "normal", _Hub(candles, candles))
+    a = strat.analyze("BTCUSD", "intraday", "normal", _Hub(candles, candles))
     assert "confluence" in a
     assert set(a["confluence"]) == {"pattern", "sentiment", "vol_ratio", "session"}
     assert a["confluence"]["sentiment"] is None
@@ -136,11 +136,11 @@ def test_sentiment_moves_confidence_bounded():
     closes = [100.0 + i * 0.05 + (i % 5) for i in range(150)]
     candles = [_c(c, c * 1.001, c * 0.999, c, ts=i * 900000) for i, c in enumerate(closes)]
     hub = _Hub(candles, candles)
-    base = strat.analyze("BTCUSDT", "intraday", "normal", hub)
+    base = strat.analyze("BTCUSD", "intraday", "normal", hub)
     if base["side"] == "neutral":
         return
-    up = strat.analyze("BTCUSDT", "intraday", "normal", hub, sentiment=0.9)
-    dn = strat.analyze("BTCUSDT", "intraday", "normal", hub, sentiment=-0.9)
+    up = strat.analyze("BTCUSD", "intraday", "normal", hub, sentiment=0.9)
+    dn = strat.analyze("BTCUSD", "intraday", "normal", hub, sentiment=-0.9)
     assert abs(up["confidence"] - base["confidence"]) <= 8.0
     assert abs(dn["confidence"] - base["confidence"]) <= 8.0
     if base["side"] == "long":
@@ -159,11 +159,11 @@ def test_display_only_scoring_off_by_default():
     import app.constants as constants
     assert constants.CONFLUENCE_SCORING is False
     hub = _fixture_hub()
-    base = strat.analyze("BTCUSDT", "intraday", "normal", hub)
+    base = strat.analyze("BTCUSD", "intraday", "normal", hub)
     if base["side"] == "neutral":
         return
     for s in (0.9, -0.9):
-        other = strat.analyze("BTCUSDT", "intraday", "normal", hub, sentiment=s)
+        other = strat.analyze("BTCUSD", "intraday", "normal", hub, sentiment=s)
         assert other["confidence"] == base["confidence"]  # zero signal impact
         assert any("Headline sentiment" in r for r in other["reasons"])
         assert not any("Headline sentiment" in r for r in base["reasons"])
@@ -173,9 +173,9 @@ def test_scoring_path_still_works_when_enabled(monkeypatch):
     import app.constants as constants
     monkeypatch.setattr(constants, "CONFLUENCE_SCORING", True)
     hub = _fixture_hub()
-    base = strat.analyze("BTCUSDT", "intraday", "normal", hub)
+    base = strat.analyze("BTCUSD", "intraday", "normal", hub)
     if base["side"] == "neutral":
         return
-    up = strat.analyze("BTCUSDT", "intraday", "normal", hub, sentiment=0.9)
+    up = strat.analyze("BTCUSD", "intraday", "normal", hub, sentiment=0.9)
     assert up["confidence"] != base["confidence"]
     assert abs(up["confidence"] - base["confidence"]) <= 8.0
