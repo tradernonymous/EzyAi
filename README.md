@@ -43,6 +43,15 @@ every result.
 - **Team access**: `PRO_ACCESS_IDS` (comma-separated chat ids, always PRO,
   editable via secret); `ADMIN_TELEGRAM_ID` approves USDT claims.
   The two lists are independent.
+- **Website card checkout**: PRO can also be bought on
+  [printezy.money/ezyai](https://printezy.money/ezyai) (the site's own
+  Stripe checkout, typed Telegram username). The site records an
+  entitlement; this bot claims it for that handle on `/start`, `/plans`,
+  `/account`, any PRO gate, and a 2-minute background sweep over handles
+  it has already seen — activation is idempotent on the Stripe session id.
+  Env: `EZYAI_SITE_URL` (default `https://printezy.money`) and
+  `EZYAI_SITE_KEY` (must equal the site's `EZYAI_ENTITLEMENT_KEY`; empty
+  disables the feature). See `app/site_entitlements.py`.
 - Expiry auto-downgrades; watches stay stored and resume on PRO.
   Env: `STRIPE_API_KEY`, `STRIPE_WEBHOOK_SECRET`, `BOT_USERNAME`,
   `USDT_ADDRESS`, `ADMIN_TELEGRAM_ID`, `PRO_ACCESS_IDS`

@@ -76,3 +76,12 @@ def pro_access_ids():
         except ValueError:
             continue
     return tuple(out)
+
+def site_url():
+    """Website that sells EzyAi PRO by card (entitlement API host)."""
+    return env("EZYAI_SITE_URL", "https://printezy.money")
+
+
+def site_key():
+    """Bearer key for the website entitlement API. Empty = feature off."""
+    return env("EZYAI_SITE_KEY", "")
