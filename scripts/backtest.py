@@ -190,6 +190,7 @@ def simulate(pair, kind, style, gates, seed=12345, refresh=False,
     lookback = sp["candles"]
 
     strat_rs, base_rs = [], []
+    strat_confs = []
     rng = random.Random(seed)
     last_fire = -10 ** 9
     for t in range(WARMUP, n - maxhold - 1, step):
@@ -236,6 +237,7 @@ def simulate(pair, kind, style, gates, seed=12345, refresh=False,
         r = _outcome(base, t, side, base[t]["close"], spec["sl"], spec["tp1"],
                      mp["rr"], maxhold)
         strat_rs.append(r)
+        strat_confs.append(conf)
         # random-direction baseline on the same bar (honest-signals concept)
         bside = "long" if rng.random() < 0.5 else "short"
         if bside == "long":
@@ -244,7 +246,7 @@ def simulate(pair, kind, style, gates, seed=12345, refresh=False,
             bsl, btp = base[t]["close"] + sl_dist, base[t]["close"] - sl_dist * mp["rr"]
         base_rs.append(_outcome(base, t, bside, base[t]["close"], bsl, btp,
                                mp["rr"], maxhold))
-    return _metrics(pair, style, strat_rs, base_rs)
+    return _metrics(pair, style, strat_rs, base_rs, strat_confs)
 
 
 def _outcome(bars, t, side, entry, sl, tp, rr, maxhold):
@@ -276,10 +278,11 @@ def _outcome(bars, t, side, entry, sl, tp, rr, maxhold):
     return (px - entry) / dist if side == "long" else (entry - px) / dist
 
 
-def _metrics(pair, style, rs, base_rs):
+def _metrics(pair, style, rs, base_rs, confs=None):
     n = len(rs)
     if n == 0:
         return {"pair": pair, "style": style, "n": 0}
+    wins = [r for r in rs if r > 0]
     wins = [r for r in rs if r > 0]
     gross_w = sum(wins)
     gross_l = -sum(r for r in rs if r < 0)
@@ -292,7 +295,7 @@ def _metrics(pair, style, rs, base_rs):
         peak = max(peak, curve)
         maxdd = max(maxdd, peak - curve)
     bwins = sum(1 for r in base_rs if r > 0)
-    return {
+    out = {
         "pair": pair, "style": style, "n": n,
         "win_pct": 100.0 * len(wins) / n,
         "profit_factor": (gross_w / gross_l) if gross_l > 0 else float("inf"),
@@ -304,14 +307,19 @@ def _metrics(pair, style, rs, base_rs):
         "rs": rs,
         "base_rs": base_rs,
     }
+    if confs is not None:
+        out["confs"] = confs
+    return out
 
 
 def aggregate(results):
-    rs, base_rs = [], []
+    rs, base_rs, confs = [], [], []
     for m in results:
         rs.extend(m.get("rs", []))
         base_rs.extend(m.get("base_rs", []))
-    agg = _metrics("ALL", results[0]["style"] if results else "?", rs, base_rs)
+        confs.extend(m.get("confs", []))
+    agg = _metrics("ALL", results[0]["style"] if results else "?", rs, base_rs,
+                   confs or None)
     return agg
 
 

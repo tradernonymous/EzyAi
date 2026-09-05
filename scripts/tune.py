@@ -122,7 +122,7 @@ def tune_style(style, refresh=False):
                     continue
                 agg = summarize(style, cand)
                 history.append((dict(cand), {k: val for k, val in agg.items()
-                                             if k != "rs" and k != "base_rs"}))
+                                             if k not in ("rs", "base_rs", "confs")}))
                 trials = [trial_sharpe(h[1]) for h in history
                           if trial_sharpe(h[1]) != float("-inf")]
                 if objective(agg, trials) > objective(best_agg, trials):
@@ -140,7 +140,7 @@ def tune_style(style, refresh=False):
 
 
 def _slim(agg):
-    return {k: v for k, v in agg.items() if k not in ("rs", "base_rs")}
+    return {k: v for k, v in agg.items() if k not in ("rs", "base_rs", "confs")}
 
 
 def main():
