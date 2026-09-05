@@ -911,6 +911,13 @@ class Bot:
                 ui.help_keyboard())
             return
 
+        if action == "tier":
+            tier = cb["tier"]
+            if tier not in constants.PLANS:
+                return
+            await self._begin_pay(update, ctx, tier, query)
+            return
+
         if action == "pay":
             tier, method = cb["tier"], cb["method"]
             if tier not in constants.PLANS or method not in billing.METHODS:

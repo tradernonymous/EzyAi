@@ -198,6 +198,7 @@ def test_commands_and_callbacks():
     assert ui.parse_callback("ezy:trial") == {"a": "trial"}
     assert ui.parse_callback("ezy:pay:6mo:stars") == {
         "a": "pay", "tier": "6mo", "method": "stars"}
+    assert ui.parse_callback("ezy:tier:6mo") == {"a": "tier", "tier": "6mo"}
     assert ui.parse_callback("ezy:paid:1mo") == {"a": "paid", "tier": "1mo"}
     assert ui.parse_callback("ezy:admin_ok:5:12mo") == {
         "a": "admin_ok", "chat": 5, "tier": "12mo"}
@@ -211,8 +212,10 @@ def _cbs(markup):
 def test_plans_and_pay_keyboards():
     cbs = _cbs(ui.plans_keyboard(True))
     assert "ezy:trial" in cbs
-    assert "ezy:pay:6mo:stars" in cbs
-    assert "ezy:pay:12mo:stars" in cbs
+    # tier buttons must open method selection, never jump straight to Stars
+    assert "ezy:tier:6mo" in cbs
+    assert "ezy:tier:12mo" in cbs
+    assert "ezy:pay:6mo:stars" not in cbs
     assert "ezy:trial" not in _cbs(ui.plans_keyboard(False))
     pay = _cbs(ui.pay_methods_keyboard("1mo"))
     assert "ezy:pay:1mo:stars" in pay

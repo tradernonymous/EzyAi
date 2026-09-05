@@ -124,6 +124,10 @@ def cb_pay(tier, method):
     return f"ezy:pay:{tier}:{method}"
 
 
+def cb_tier(tier):
+    return f"ezy:tier:{tier}"
+
+
 def cb_paid(tier):
     return f"ezy:paid:{tier}"
 
@@ -162,6 +166,8 @@ def parse_callback(data):
         return {"a": "unwatch", "pair": parts[2]}
     if kind == "pay" and len(parts) == 4:
         return {"a": "pay", "tier": parts[2], "method": parts[3]}
+    if kind == "tier" and len(parts) == 3:
+        return {"a": "tier", "tier": parts[2]}
     if kind == "paid" and len(parts) == 3:
         return {"a": "paid", "tier": parts[2]}
     if kind == "admin_ok" and len(parts) == 4:
@@ -279,7 +285,7 @@ def plans_keyboard(trial_eligible):
         label = f"\U0001f48e {p['label']} \u2014 ${p['usd']:.2f}"
         if p["badge"]:
             label += f" \u2b50 {p['badge']}"
-        rows.append([InlineKeyboardButton(label, callback_data=cb_pay(tid, "stars"))])
+        rows.append([InlineKeyboardButton(label, callback_data=cb_tier(tid))])
     rows.append([InlineKeyboardButton("\U0001f3e0 Menu", callback_data=cb_menu("dash")),
                  InlineKeyboardButton("\u2715 Cancel", callback_data="ezy:cancel")])
     return InlineKeyboardMarkup(rows)
