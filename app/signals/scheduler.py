@@ -20,6 +20,7 @@ class Service:
         self.last_check = {}
         self.plans = {}
         self.paid_events = []
+        self.users = {}  # lowercased telegram username -> chat_id
         self.pro_ids = {int(i) for i in pro_ids}
         self.admin_id = admin_id
         # State is mutated from two threads: the asyncio bot loop and the
@@ -111,6 +112,24 @@ class Service:
         with self._lock:
             return bool(event_id) and str(event_id) in self.paid_events
 
+    # -- users (handle -> chat id, for website purchases) -------------------
+    def remember_user(self, chat_id, username):
+        """Record the handle seen on an update so website purchases typed
+        with that handle can be matched to this chat by the sweep."""
+        handle = str(username or "").strip().lstrip("@").lower()
+        if not handle:
+            return
+        with self._lock:
+            if self.users.get(handle) == int(chat_id):
+                return
+            self.users[handle] = int(chat_id)
+            self._save()
+
+    def chat_for_username(self, username):
+        handle = str(username or "").strip().lstrip("@").lower()
+        with self._lock:
+            return self.users.get(handle)
+
     def expiry_nudges(self):
         """Chat ids with stored watches/autopilot whose plan is free and
         who haven't been nudged yet (covers expiry + legacy pre-PRO)."""
@@ -139,6 +158,11 @@ class Service:
                 self.hub, a["chat_id"], a["style"], a["mode"])
         self.daily_counters = data.get("daily", {})
         self.paid_events = [str(x) for x in (data.get("paid_events") or [])][-500:]
+        for k, v in (data.get("users") or {}).items():
+            try:
+                self.users[str(k).lower()] = int(v)
+            except (TypeError, ValueError):
+                continue
         for k, v in (data.get("plans") or {}).items():
             rec = {"plan": "free", "until": 0.0, "trial_used": False,
                    "nudged": False}
@@ -157,6 +181,7 @@ class Service:
                 "daily": self.daily_counters,
                 "plans": self.plans,
                 "paid_events": self.paid_events[-500:],
+                "users": self.users,
             }
             tmp = self.state_path.with_suffix(".json.tmp")
             tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")

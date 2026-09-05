@@ -164,7 +164,9 @@ def main():
               pay_config={"usdt_address": config.usdt_address(),
                           "admin_id": config.admin_id(),
                           "stripe_key": config.stripe_api_key(),
-                          "bot_username": config.bot_username()})
+                          "bot_username": config.bot_username(),
+                          "site_url": config.site_url(),
+                          "site_key": config.site_key()})
 
     start_webhook_server(service, bot.app)
     logger.info("starting EzyAi ...")

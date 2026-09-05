@@ -1,7 +1,7 @@
 import asyncio
 import logging
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, Update
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -9,10 +9,12 @@ from telegram.ext import (
     CommandHandler,
     MessageHandler,
     PreCheckoutQueryHandler,
+    TypeHandler,
     filters,
 )
 
 from . import billing
+from . import site_entitlements
 from . import constants
 from . import ui
 from .analysis import sentiment as _sent
@@ -30,12 +32,18 @@ class Bot:
         self.fund = Fundamentals()
         self.demo_ok = demo_ok
         self.pay = dict(pay_config or {})
+        self.site = site_entitlements.SiteClient(
+            self.pay.get("site_url"), self.pay.get("site_key"))
+        self._sweep_tick = 0
         self.app = Application.builder().token(token).build()
         self._register()
 
     def _register(self):
         a = self.app
         a.post_init = self.post_init_hook
+        # group -1 runs before every handler: remember handle -> chat id so
+        # website PRO purchases (typed by username) can be matched later.
+        a.add_handler(TypeHandler(Update, self._remember_user), group=-1)
         a.add_handler(CommandHandler("start", self.cmd_start))
         a.add_handler(CommandHandler("help", self.cmd_help))
         a.add_handler(CommandHandler("dashboard", self.cmd_dashboard))
@@ -77,6 +85,17 @@ class Bot:
             await self.service.tick(send)
         except Exception as exc:
             logger.warning("tick failed: %s", exc)
+        self._sweep_tick += 1
+        if self.site.enabled and self._sweep_tick % 4 == 0:
+            try:
+                granted = await asyncio.to_thread(
+                    site_entitlements.sweep, self.site, self.service)
+                for chat_id, row, until in granted:
+                    await self.app.bot.send_message(
+                        chat_id, msg.site_pro_activated_text(row, until),
+                        parse_mode=ParseMode.HTML)
+            except Exception as exc:
+                logger.warning("site sweep failed: %s", exc)
         try:
             for chat_id in self.service.expiry_nudges():
                 await self.app.bot.send_message(
@@ -130,6 +149,38 @@ class Bot:
             "Welcome to <b>EzyAi</b> \u2014 live market analysis, "
             "alerts and auto signals.",
             reply_markup=ui.help_keyboard())
+        await self._redeem_site(update)
+
+    # -- website purchases (printezy.money) ----------------------------------
+
+    async def _remember_user(self, update, ctx):
+        """Runs before every handler (group -1)."""
+        user = getattr(update, "effective_user", None)
+        chat = getattr(update, "effective_chat", None)
+        if user is not None and chat is not None and getattr(user, "username", None):
+            try:
+                self.service.remember_user(chat.id, user.username)
+            except Exception as exc:
+                logger.debug("remember_user failed: %s", exc)
+
+    async def _redeem_site(self, update):
+        """Claim PRO bought on the website for this user's handle. Returns
+        True when new PRO time was granted (and the user was told)."""
+        if not self.site.enabled:
+            return False
+        user = update.effective_user
+        chat_id = update.effective_chat.id
+        username = getattr(user, "username", None) if user else None
+        try:
+            granted = await asyncio.to_thread(
+                site_entitlements.redeem_for_user,
+                self.site, self.service, chat_id, username)
+        except Exception as exc:
+            logger.warning("site redeem failed chat=%s: %s", chat_id, exc)
+            return False
+        for row, until in granted:
+            await self._reply(update, msg.site_pro_activated_text(row, until))
+        return bool(granted)
 
     async def cmd_help(self, update, ctx):
         await self._reply(update, msg.help_text(),
@@ -425,6 +476,10 @@ class Bot:
 
     async def _send_pro_gate(self, update, feature, query=None):
         chat_id = update.effective_chat.id
+        # A website buyer hitting a gate before /start: claim first, and if
+        # that unlocked PRO there is nothing to gate.
+        if await self._redeem_site(update) and self.service.is_pro(chat_id):
+            return
         text = msg.pro_gate(feature, self._trial_eligible(chat_id))
         kb = ui.plans_keyboard(self._trial_eligible(chat_id))
         if query is not None:
@@ -434,6 +489,8 @@ class Bot:
 
     async def cmd_plans(self, update, ctx):
         chat_id = update.effective_chat.id
+        if await self._redeem_site(update) and self.service.is_pro(chat_id):
+            return
         eligible = self._trial_eligible(chat_id)
         await self._reply(update, msg.plans_text(eligible),
                           reply_markup=ui.plans_keyboard(eligible))
@@ -445,6 +502,7 @@ class Bot:
 
     async def cmd_account(self, update, ctx):
         chat_id = update.effective_chat.id
+        await self._redeem_site(update)
         status = self.service.plan_status(chat_id)
         comped = self.service.is_comped(chat_id)
         watches = self.service.list_watches(chat_id)

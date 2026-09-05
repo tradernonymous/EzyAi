@@ -548,6 +548,17 @@ def pro_gate(feature, can_trial):
     return "\n".join(lines)
 
 
+def site_pro_activated_text(row, until):
+    """Confirmation for PRO bought by card on the website."""
+    import datetime
+    date = datetime.datetime.fromtimestamp(until, datetime.timezone.utc).strftime("%d %b %Y")
+    months = int(row.get("months", 0))
+    span = "1 month" if months == 1 else f"{months} months"
+    return (f"✅ <b>PRO activated</b> · {span} until {date}.\n"
+            "Thanks for your purchase on printezy.money — "
+            "your watches resume automatically. Enjoy!")
+
+
 def plans_text(trial_eligible):
     from .. import billing as _b
     from .. import constants as _c
