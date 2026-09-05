@@ -13,6 +13,11 @@ from app.signals.scheduler import Service
 
 logger = logging.getLogger("ezyai")
 
+# The bot loop runs inside python-telegram-bot's Application, which uses
+# __slots__ and rejects custom attributes. The webhook thread needs a handle
+# on that loop to post confirmations, so we capture it here at startup.
+_EZY_LOOP = None
+
 
 def _ev(event, *path):
     cur = event
@@ -38,13 +43,18 @@ def admin_alert(bot_app, text):
         async def _send():
             await bot_app.bot.send_message(
                 admin, f"\u26a0\ufe0f {text}", parse_mode="HTML")
-        loop = getattr(bot_app, "_ezy_loop", None)
-        if loop is not None and loop.is_running():
-            asyncio.run_coroutine_threadsafe(_send(), loop).result(timeout=10)
-        else:
-            asyncio.run(_send())
+        _post_to_loop(_send)
     except Exception as exc:
         logger.warning("admin alert failed: %s", exc)
+
+
+def _post_to_loop(coro_factory):
+    """Run a coroutine on the bot's loop from another thread."""
+    loop = _EZY_LOOP
+    if loop is not None and loop.is_running():
+        asyncio.run_coroutine_threadsafe(coro_factory(), loop).result(timeout=20)
+    else:
+        asyncio.run(coro_factory())
 
 
 def notify_pro_active(bot_app, chat_id, tier, until):
@@ -61,13 +71,8 @@ def notify_pro_active(bot_app, chat_id, tier, until):
     async def _send():
         await bot_app.bot.send_message(chat_id, text, parse_mode="HTML")
 
-    loop = getattr(bot_app, "_ezy_loop", None)
     try:
-        if loop is not None and loop.is_running():
-            fut = asyncio.run_coroutine_threadsafe(_send(), loop)
-            fut.result(timeout=20)
-        else:
-            asyncio.run(_send())
+        _post_to_loop(_send)
     except Exception as exc:
         logger.warning("pro notify failed chat=%s: %s", chat_id, exc)
 
@@ -166,7 +171,8 @@ def main():
 
     async def _remember_loop(app):
         # webhook thread needs a handle on the running loop
-        app._ezy_loop = asyncio.get_running_loop()
+        global _EZY_LOOP
+        _EZY_LOOP = asyncio.get_running_loop()
         await bot.post_init_hook(app)
 
     bot.app.post_init = _remember_loop
