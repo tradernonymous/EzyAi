@@ -1,6 +1,13 @@
 from . import indicators as ta
 from . import levels as lv
+from . import patterns as pat
+from . import regime as rg
+from . import sentiment as sent
 from .. import constants
+
+PATTERN_POINTS = 4.0
+SENTIMENT_POINTS = 3.0
+SENTIMENT_CUT = 0.15
 
 
 def _spec(side, price, atr_value, support_levels, resistance_levels, mode_profile):
@@ -127,7 +134,12 @@ def _confidence(side, candles, closes, trend, macd_hist, rsi_v, bb_mid, stoch_k,
     return _confidence_from(side, feats, gates, reasons)
 
 
-def analyze(pair, style, mode, hub, interval=None):
+def analyze(pair, style, mode, hub, interval=None, sentiment=None):
+    """sentiment: optional precomputed headline compound in [-1, 1] (or None).
+
+    Only the on-demand /analyze path supplies it; background watch/autopilot
+    ticks pass nothing so they stay pure-technical and fast.
+    """
     style_profile = constants.STYLE_PROFILE[style]
     mode_profile = constants.MODE_PROFILE[mode]
     base_tf = interval or style_profile["base_tf"]
@@ -174,12 +186,66 @@ def analyze(pair, style, mode, hub, interval=None):
 
     spec = None
     confidence = 0.0
+    confluence = {"pattern": 0, "sentiment": sentiment, "vol_ratio": None,
+                  "session": "open"}
     if side != "neutral":
         spec = _spec(side, price, atr_v, sup_lv, res_lv, mode_profile)
         gates = constants.SIGNAL_GATES[style]
         confidence = _confidence(side, candles, closes, direction, macd_h_l, rsi_v,
                                  bb_mid_l, st_k_l, adx_l, reasons, gates)
         confidence = min(100.0, confidence * (0.9 + mode_profile["aggression"] * 0.12))
+        # Phase-3 confluence: factual notes always shown (zero signal
+        # impact); confidence points only when CONFLUENCE_SCORING is on,
+        # which requires backtest proof (currently off -- see constants).
+        scoring = constants.CONFLUENCE_SCORING
+        bias = pat.detect(candles)
+        confluence["pattern"] = bias
+        if bias != 0:
+            name = ("bullish engulfing/hammer" if bias == 1
+                    else "bearish engulfing/shooting star")
+            if scoring:
+                agrees = ((bias == 1 and side == "long")
+                          or (bias == -1 and side == "short"))
+                confidence += PATTERN_POINTS if agrees else -PATTERN_POINTS
+                note = pat.describe(bias, side)
+            else:
+                note = f"Last-bar candle pattern: {name}"
+            if note:
+                reasons.append(note)
+        if sentiment is not None and -1.0 <= sentiment <= 1.0:
+            if scoring:
+                if (sentiment > SENTIMENT_CUT and side == "long") or \
+                   (sentiment < -SENTIMENT_CUT and side == "short"):
+                    confidence += SENTIMENT_POINTS
+                elif (sentiment < -SENTIMENT_CUT and side == "long") or \
+                     (sentiment > SENTIMENT_CUT and side == "short"):
+                    confidence -= SENTIMENT_POINTS
+                note = sent.describe(sentiment)
+                reasons.append("\U0001f4f0 " + note if note else
+                               f"\U0001f4f0 Headline sentiment ({sentiment:+.2f})")
+            else:
+                reasons.append(f"\U0001f4f0 Headline sentiment ({sentiment:+.2f})")
+        ratio = rg.vol_ratio(ta.realized_vol(closes), len(closes) - 1)
+        confluence["vol_ratio"] = ratio
+        if scoring:
+            confidence = rg.apply_vol_regime(confidence, ratio, reasons)
+        elif ratio is not None and (ratio >= rg.VOL_CHAOS_RATIO
+                                    or ratio <= rg.VOL_DEAD_RATIO):
+            reasons.append(f"Volatility x{ratio:.1f} vs recent median")
+        try:
+            kind = hub.classify(pair)
+        except Exception:
+            kind = None
+        state = rg.session_state(kind, candles[-1]["ts"]) if kind else "open"
+        confluence["session"] = state
+        if scoring:
+            confidence = rg.apply_session(confidence, kind, candles[-1]["ts"], reasons)
+        elif state != "open" and base_tf != "1d":
+            # daily bars print at 00:00 UTC; session labels are meaningless there
+            label = {"closed": "Weekend market (thin/stale quotes)",
+                     "thin": "Thin trading session"}.get(state, state)
+            reasons.append(f"{label} -- interpret with care")
+        confidence = max(0.0, min(100.0, confidence))
 
     strength = "weak"
     if adx_l is not None:
@@ -218,6 +284,7 @@ def analyze(pair, style, mode, hub, interval=None):
         "side": side,
         "spec": spec,
         "confidence": float(round(confidence, 1)),
+        "confluence": confluence,
         "reasons": reasons,
         "exit_notes": exit_notes,
         "hold_horizon": style_profile["hold"],

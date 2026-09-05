@@ -185,6 +185,27 @@ def last(values):
     return None
 
 
+def realized_vol(closes, window=20):
+    """Rolling stdev of log returns (per-bar units; ratios cancel units).
+
+    Used only as a relative gauge by regime.vol_ratio, never as an
+    absolute number, so no annualization is needed."""
+    import math
+    n = len(closes)
+    out = [None] * n
+    rets = [None] * n
+    for i in range(1, n):
+        if closes[i - 1] > 0 and closes[i] > 0:
+            rets[i] = math.log(closes[i] / closes[i - 1])
+    for i in range(window, n):
+        w = rets[i - window + 1:i + 1]
+        if any(r is None for r in w):
+            continue
+        m = sum(w) / window
+        out[i] = (sum((r - m) ** 2 for r in w) / window) ** 0.5
+    return out
+
+
 def all_last(values):
     out = []
     for fn in values:

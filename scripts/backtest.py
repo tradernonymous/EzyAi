@@ -28,6 +28,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app import constants  # noqa: E402
 from app.analysis import indicators as ind  # noqa: E402
 from app.analysis import levels as lv  # noqa: E402
+from app.analysis import patterns as pat  # noqa: E402
+from app.analysis import regime as rg  # noqa: E402
 from app.analysis import strategy as strat  # noqa: E402
 from app.data.provider import BinanceProvider, YahooProvider  # noqa: E402
 
@@ -151,6 +153,8 @@ def features(pair, kind, style, refresh=False):
         "ema50": ind.ema(closes, 50), "rsi": ind.rsi(closes),
         "atr": ind.atr(base), "macd_h": mh, "bb_mid": bb_mid,
         "stoch_k": st_k, "adx": ind.adx(base),
+        "patterns": pat.pattern_bias(base),
+        "roll": ind.realized_vol(closes),
     }
     _FEATS[key] = feats
     return feats
@@ -164,8 +168,13 @@ def _levels_at(direction, ts, lookback):
     return supports, resistances
 
 
-def simulate(pair, kind, style, gates, seed=12345, refresh=False):
-    """Walk history firing the live decision path; return dict of metrics."""
+def simulate(pair, kind, style, gates, seed=12345, refresh=False,
+               confluence=frozenset()):
+    """Walk history firing the live decision path; return dict of metrics.
+
+    confluence: subset of {"patterns", "vol", "session"} replaying the same
+    helpers analyze() applies live (sentiment excluded: no historical news).
+    """
     sp = constants.STYLE_PROFILE[style]
     mp = constants.MODE_PROFILE["normal"]  # backtest in normal mode only
     tf_s = constants.INTERVALS[sp["base_tf"]]
@@ -200,6 +209,19 @@ def simulate(pair, kind, style, gates, seed=12345, refresh=False):
         side = "long" if side_dir == "up" else "short"
         conf = strat._confidence_from(side, f, gates, [])
         conf = min(100.0, conf * (0.9 + mp["aggression"] * 0.12))
+        # confluence replay mirrors strategy.analyze() order exactly
+        if "patterns" in confluence:
+            bias = feats["patterns"][t]
+            if bias != 0:
+                agrees = ((bias == 1 and side == "long")
+                          or (bias == -1 and side == "short"))
+                conf += strat.PATTERN_POINTS if agrees else -strat.PATTERN_POINTS
+        if "vol" in confluence:
+            conf = rg.apply_vol_regime(
+                conf, rg.vol_ratio(feats["roll"], t), [])
+        if "session" in confluence:
+            conf = rg.apply_session(conf, kind, base[t]["ts"], [])
+        conf = max(0.0, min(100.0, conf))
         if conf < gate:
             continue
         if t - last_fire < min_gap:
@@ -309,13 +331,17 @@ def main():
                     choices=["scalping", "intraday", "swing"])
     ap.add_argument("--pair", default=None)
     ap.add_argument("--refresh", action="store_true")
+    ap.add_argument("--confluence", default="",
+                    help="comma list of patterns,vol,session")
     args = ap.parse_args()
+    conf = frozenset(c for c in args.confluence.split(",") if c)
     pairs = [(p, k) for p, k in SEEDS if args.pair is None or p == args.pair]
     gates = constants.SIGNAL_GATES[args.style]
-    print(f"style={args.style} gates={gates}")
+    print(f"style={args.style} confluence={sorted(conf) or 'off'} gates={gates}")
     results = []
     for pair, kind in pairs:
-        m = simulate(pair, kind, args.style, gates, refresh=args.refresh)
+        m = simulate(pair, kind, args.style, gates, refresh=args.refresh,
+                     confluence=conf)
         results.append(m)
         print(fmt_row(m))
     print(fmt_row(aggregate(results)))

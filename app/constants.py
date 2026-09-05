@@ -82,6 +82,13 @@ MODE_PROFILE = {
 
 CONFIDENCE_GATE = 62
 
+# Phase-3 confluence scoring switch. Backtest evidence (2026-09: patterns,
+# vol-regime, session all ~neutral to slightly negative vs tuned gates)
+# does not support spending confidence points, so scoring stays OFF.
+# Factual confluence notes are still shown in reasons (zero signal impact).
+# Revisit only with calibration proof (Phase 4).
+CONFLUENCE_SCORING = False
+
 # Tunable signal gates per style. Defaults reproduce the legacy hardcoded
 # thresholds exactly; Phase-2 tuning may adjust them based on backtest
 # evidence (must beat defaults AND a random baseline to ship).

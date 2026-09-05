@@ -53,7 +53,8 @@ def evaluate(analysis):
     }
 
 
-def quick_analyze(pair, style, mode, hub, interval=None):
-    analysis = strat.analyze(pair, style, mode, hub, interval=interval)
+def quick_analyze(pair, style, mode, hub, interval=None, sentiment=None):
+    analysis = strat.analyze(pair, style, mode, hub, interval=interval,
+                             sentiment=sentiment)
     signal = evaluate(analysis)
     return analysis, signal

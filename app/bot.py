@@ -11,6 +11,7 @@ from telegram.ext import (
 )
 
 from . import constants
+from .analysis import sentiment as _sent
 from .formatting import message as msg
 from .fundamentals import Fundamentals
 from .signals import engine as signal_engine
@@ -279,8 +280,17 @@ class Bot:
             await self._edit_or_send(query, "\U0001f4c8 Generating analysis\u2026"
                                             f"\nPair <b>{pair}</b> \u00b7 TF {tf}")
             try:
+                headlines = self.fund.news(pair.replace("USDT", ""), limit=5)
+            except Exception:
+                headlines = []
+            try:
+                score = _sent.score_headlines(headlines)
+            except Exception:
+                score = None
+            try:
                 analysis = signal_engine.quick_analyze(
-                    pair, "intraday", "normal", self.hub, interval=tf)[0]
+                    pair, "intraday", "normal", self.hub, interval=tf,
+                    sentiment=score)[0]
             except Exception as exc:
                 await query.message.reply_text(f"Analysis failed: {exc}")
                 return
