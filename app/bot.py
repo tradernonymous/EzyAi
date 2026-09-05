@@ -109,13 +109,6 @@ class Bot:
 
     async def cmd_start(self, update, ctx):
         ctx.user_data.pop(self._flow_key(), None)
-        # One-time cleanup confirmation: hides any stale bottom button bar
-        # cached by the client (plain message carries the removal).
-        await self._reply(
-            update,
-            "\U0001f9f9 Cleaned up \u2014 the old button bar is gone. "
-            "From now on everything lives in the chat buttons "
-            "and the Menu (\u2630) commands.")
         await self._reply(
             update,
             "Welcome to <b>EzyAi</b> \u2014 live market analysis, "
