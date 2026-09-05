@@ -1,21 +1,30 @@
-app = "ezytradeai"
-primary_region = "iad"
+# fly.toml app configuration file generated for ezyai on 2026-09-05T07:15:35Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'ezyai'
+primary_region = 'ams'
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = 'Dockerfile'
 
 [env]
-  EZYAI_STATE_FILE = "/data/state.json"
-  EZYAI_LOG_LEVEL = "INFO"
-  PORT = "8080"
+  EZYAI_LOG_LEVEL = 'INFO'
+  EZYAI_STATE_FILE = '/data/state.json'
+  PORT = '8080'
 
-[mounts]
-  source = "ezyai_state"
-  destination = "/data"
+[[mounts]]
+  source = 'ezyai_state'
+  destination = '/data'
 
 [http_service]
   internal_port = 8080
-  force_https = false
-  auto_stop_machines = false
+  auto_stop_machines = 'off'
   auto_start_machines = true
-  min_machines = 1
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
+  memory_mb = 256
