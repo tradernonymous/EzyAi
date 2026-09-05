@@ -147,7 +147,7 @@ def _watchlist_lines(kind, pair):
     events = _sc.upcoming_events(kind, pair)
     if not events:
         return []
-    lines = ["\U0001f5d3 <b>Next watchlist</b>"]
+    lines = ["", "\U0001f5d3 <b>Next watchlist</b>"]
     for date, label in events:
         lines.append(f"\u2022 {date} \u2014 {label}")
     return lines
@@ -155,7 +155,7 @@ def _watchlist_lines(kind, pair):
 
 def outlook_stock(symbol, data):
     from ..fundamentals import scoring as _sc
-    lines = []
+    lines = [""]
     if data.get("fscore") is not None:
         lines.append(f"\U0001f4cb Executive summary: {data.get('fgrade', '?')} fundamentals "
                      f"({data['fscore']:.0f}/100) \u00b7 price {_trend_word(data.get('chg_3m'))} over 3m.")
@@ -184,7 +184,7 @@ def outlook_stock(symbol, data):
 
 
 def outlook_crypto(symbol, data):
-    lines = []
+    lines = [""]
     if data.get("cscore") is not None:
         lines.append(f"\U0001f4cb Executive summary: {data.get('cgrade', '?')} momentum gauge "
                      f"({data['cscore']:.0f}/100) \u00b7 {_trend_word(data.get('chg_30d'))} over 30d.")
@@ -205,7 +205,7 @@ def outlook_crypto(symbol, data):
 
 
 def outlook_cfd(symbol, data):
-    lines = []
+    lines = [""]
     lines.append(f"\U0001f4cb Executive summary: price {_trend_word(data.get('chg_1y'))} over 1y.")
     lines.append(f"\U0001f52e Outlook \u2014 short term {_trend_word(data.get('chg_1w'))}; "
                  f"medium term {_trend_word(data.get('chg_3m'))}.")
@@ -233,7 +233,7 @@ def outlook_cfd(symbol, data):
 
 
 def outlook_fx(symbol, data):
-    lines = []
+    lines = [""]
     v = data.get("verdict") or {}
     if v.get("base"):
         lines.append(f"\U0001f4cb Executive summary: {v.get('direction', 'mixed')} \u00b7 "
@@ -277,6 +277,7 @@ def fundamentals_report(kind, symbol, data, hub_mode):
         if data.get("desc"):
             lines.append(f"\U0001f4dd {e(data['desc'])}")
         if data.get("cscore") is not None:
+            lines.append("")
             lines.append(f"\U0001f3af Momentum gauge: <b>{data['cscore']:.0f}/100 "
                          f"({data.get('cgrade', '?')})</b> {meter(data['cscore'])}")
             pl = pillars_line(data.get("cpillars", {}),
@@ -310,6 +311,7 @@ def fundamentals_report(kind, symbol, data, hub_mode):
             if data.get("stat_note"):
                 lines.append(f"\U0001f4ca {e(data['stat_note'])} (price momentum only).")
             if data.get("fscore") is not None:
+                lines.append("")
                 ent = f" \u00b7 {e(data['stat_entity'])}" if data.get("stat_entity") else ""
                 lines.append(f"\U0001f3af Fundamental score: <b>{data['fscore']:.0f}/100 "
                              f"({data.get('fgrade', '?')})</b> {meter(data['fscore'])}{ent}")
@@ -356,6 +358,7 @@ def fundamentals_report(kind, symbol, data, hub_mode):
             lines.append(f"Realized volatility (annualized): {data.get('vol_pct', 0):.0f}%")
             cot = data.get("cot")
             if cot:
+                lines.append("")
                 arrow = "\U0001f7e2" if (cot.get("net_long") or 0) > 0 else "\U0001f534"
                 wow = f" ({cot['wow']:+,} WoW)" if cot.get("wow") is not None else ""
                 lines.append(f"{arrow} Large speculators net "
@@ -445,8 +448,9 @@ def related_reading(kind, symbol, links, news):
         rest = [l for l in ("Investing.com", "FXStreet", "TradingView ideas", "Yahoo Finance")
                 if l in by_label]
         if rest:
-            lines.append("Wider reading: " + " and ".join(
-                _linked(by_label[l], l) for l in rest) + ".")
+            parts = [_linked(by_label[l], l) for l in rest]
+            lines.append("Wider reading: " + (parts[0] if len(parts) == 1
+                         else ", ".join(parts[:-1]) + " and " + parts[-1]) + ".")
     if news:
         lines.append("")
         lines.append("\U0001f4f0 <b>Related headlines</b>")
