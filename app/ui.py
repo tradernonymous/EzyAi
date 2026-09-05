@@ -19,7 +19,7 @@ Callback scheme (all prefixed ``ezy:``, <=64 bytes):
   ezy:cancel                 abort flow
 """
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from . import constants
 
@@ -76,19 +76,9 @@ MODE_HINT = {
 
 
 def route_menu(text):
-    """Menu button label -> flow name (or None)."""
+    """Menu label -> flow name (or None). Kept so users can also just type
+    e.g. "Analyze" or tap the BotFather / command menu."""
     return MENU_ROUTE.get((text or "").strip())
-
-
-def main_keyboard():
-    return ReplyKeyboardMarkup(
-        [[MENU_ANALYZE, MENU_QUOTE],
-         [MENU_WATCH, MENU_AUTO],
-         [MENU_FUND, MENU_DASH],
-         [MENU_HELP]],
-        resize_keyboard=True,
-        is_persistent=True,
-    )
 
 
 # -- callback data builders -------------------------------------------------

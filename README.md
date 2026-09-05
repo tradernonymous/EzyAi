@@ -7,10 +7,11 @@ intraday / swing) and *risk mode* (safe / normal / aggressive).
 
 ## Features
 
-Everything below works two ways: tap the **persistent button menu**
-(always on screen) or type the commands. Every flow is guided
-(pair → style → risk mode) with Back/Cancel, confirmations, and one-tap
-follow-ups (Watch / Fundamentals / Quote) on every result.
+Everything below works two ways: tap the inline shortcut buttons attached
+to bot messages, or type the commands (also in the Telegram Menu button).
+Every flow is guided (pair → style → risk mode) with Back/Cancel,
+confirmations, and one-tap follow-ups (Watch / Fundamentals / Quote) on
+every result.
 
 - **`/analyze`** — on-demand market analysis: trend, support/resistance,
   entry zone, stop loss, TP1/TP2, risk-reward, confidence score, exit rules,

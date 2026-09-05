@@ -72,9 +72,6 @@ class Bot:
     async def _reply(self, update, text, **kw):
         if not text:
             return
-        # The main button menu stays on screen: attach it to every message
-        # that does not already carry an inline keyboard (both can't combine).
-        kw.setdefault("reply_markup", ui.main_keyboard())
         r = await update.effective_chat.send_message(
             text, parse_mode=ParseMode.HTML,
             disable_web_page_preview=True, **kw)
@@ -107,16 +104,11 @@ class Bot:
 
     async def cmd_start(self, update, ctx):
         ctx.user_data.pop(self._flow_key(), None)
-        # Anchor the persistent button menu first so it is never hidden,
-        # then the welcome card with shortcut buttons.
-        await self._reply(
-            update,
-            "\U0001f44b Tap a button below \u2014 this menu stays on every screen.")
         await self._reply(
             update,
             "Welcome to <b>EzyAi</b> \u2014 live market analysis, "
             "alerts and auto signals.\n"
-            "Tap <b>Analyze</b> to run your first scan.",
+            "Tap a shortcut below, or open <b>Menu</b> (\u2630) for all commands.",
             reply_markup=ui.help_keyboard())
 
     async def cmd_help(self, update, ctx):

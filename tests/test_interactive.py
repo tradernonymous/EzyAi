@@ -23,14 +23,6 @@ def test_menu_routes_all_labels():
     assert ui.route_menu("") is None
 
 
-def test_main_keyboard_never_hidden():
-    kb = ui.main_keyboard()
-    assert kb.is_persistent is True
-    flat = [b.text for row in kb.keyboard for b in row]
-    for label in ui.MENU_LABELS:
-        assert label in flat
-
-
 def test_commands_cover_every_function():
     cmds = [c for c, _ in ui.COMMANDS]
     for c in ("analyze", "watch", "watches", "quote", "fundamentals",
