@@ -161,6 +161,48 @@ def test_dashboard_view_states():
     assert "off" in off and "0" in off
 
 
+def test_dashboard_dots_reflect_alert_state():
+    ws = [{"pair": "BTCUSD", "style": "intraday", "mode": "normal",
+           "last_signal_ts": 123.0},
+          {"pair": "XAUUSD", "style": "swing", "mode": "safe",
+           "last_signal_ts": 0.0}]
+    on = msg.dashboard_view(ws, _Pilot(), "live")
+    assert "\U0001f7e2" in on and "\U0001f7e1" in on
+
+
+def test_visual_helpers():
+    spark = msg.sparkline([1, 2, 3, 2, 5, 4])
+    assert len(spark) == 6 and spark[-2] == "\u2588"  # peak maps to full block
+    assert msg.sparkline([5, 5, 5]) == "\u2500\u2500\u2500"
+    assert msg.sparkline([]) == "" and msg.sparkline([1]) == ""
+    bar = msg.position_bar(100.0, 200.0, 150.0, width=11)
+    assert bar == "\u2500" * 5 + "\u25cf" + "\u2500" * 5
+    assert msg.position_bar(100.0, 100.0, 100.0) == ""
+    assert msg.position_bar(None, 200.0, 150.0) == ""
+    # clamping at the edges
+    assert msg.position_bar(0.0, 10.0, 99.0).endswith("\u25cf")
+    assert msg.position_bar(0.0, 10.0, -5.0).startswith("\u25cf")
+
+
+def test_quote_carries_range_bar():
+    tick = {"price": 300.0, "change_pct": 1.0, "high": 310.0, "low": 290.0,
+            "volume": 1234.0, "quote": "USDT", "mode": "live"}
+    t = msg.quote_report("BTCUSD", tick)
+    assert "BTCUSD" in t and "300.0000" in t and "+1.00%" in t
+    assert "Day range:" in t and "\u25cf" in t
+
+
+def test_signal_confidence_meter_and_levels():
+    sig = {"pair": "BTCUSD", "side": "long", "style": "intraday",
+           "mode": "normal", "tf": "15m", "entry_zone": (100.0, 101.0),
+           "sl": 99.0, "tp1": 102.0, "tp2": 103.0, "rr": 2.0,
+           "risk_pct": 1.0, "confidence": 78.0, "reasons": ["rsi bounce"],
+           "support": [98.0], "resistance": [104.0]}
+    t = msg.signal_message(sig)
+    assert "\u25b0" in t and "Levels" in t and "support" in t
+    assert "Not financial advice" in t
+
+
 def test_confirm_texts_carry_risk():
     t = msg.confirm_watch_text("BTCUSD", "intraday", "normal", 300, 2.0, 1.0)
     assert "BTCUSD" in t and "300" in t and "1.0%" in t

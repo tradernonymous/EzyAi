@@ -191,7 +191,8 @@ class Bot:
                 pair, style, mode, self.hub, None, score))[0]
         except Exception as exc:
             target = query.message if query is not None else None
-            text = f"Analysis failed: {exc}"
+            text = (f"\U0001f9f9 Analysis hiccup for <b>{pair}</b> ({exc}) \u2014 "
+                    "feeds stumble sometimes. Tap retry in a few seconds.")
             kb = ui.retry_pair_keyboard("analyze")
             if target is not None:
                 await target.reply_text(text, parse_mode=ParseMode.HTML,
@@ -219,7 +220,8 @@ class Bot:
             tick = await asyncio.to_thread(self.hub.fetch_ticker, pair)
             tick["mode"] = "demo" if self.hub.mode == "demo" else "live"
         except Exception:
-            text = f"Could not fetch <b>{pair}</b>."
+            text = (f"Could not fetch <b>{pair}</b> \u2014 feed hiccup. "
+                    "Retry in a few seconds.")
             kb = ui.retry_pair_keyboard("quote")
             if query is not None:
                 await self._edit_or_send(query, text, kb)

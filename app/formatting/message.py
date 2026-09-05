@@ -34,9 +34,14 @@ def analysis_report(a):
     style_label = constants.STYLE_PROFILE[a["style"]]["label"]
     mode_label = constants.MODE_PROFILE[a["mode"]]["label"]
 
-    lines.append(f"\U0001f4c8 <b>MARKET ANALYSIS</b> \u2014 {e(a['pair'])}")
-    lines.append(f"Style: {style_label} \u00b7 Mode: {mode_label} \u00b7 TF {a['base_tf']} (trend: {a['direction_tf']})")
+    lines.append(f"\U0001f4c8 <b>{e(a['pair'])}</b> \u00b7 {BADGE[a['side']]} "
+                 f"{SIDE_LABEL[a['side']]} idea")
+    lines.append(f"{style_label} \u00b7 {mode_label} \u00b7 TF {a['base_tf']} (trend: {a['direction_tf']})")
     lines.append(f"Price: <b>{price(a['price'])}</b> \u00b7 Data: {a['data_mode']}")
+    bb = ind["bb"]
+    bb_bar = position_bar(bb["lower"], bb["upper"], a["price"])
+    if bb_bar:
+        lines.append(f"Bollinger position: {bb_bar} [{price(bb['lower'])}, {price(bb['upper'])}]")
     lines.append("")
     adx_text = f"ADX {trend['adx']:.0f}" if trend["adx"] is not None else "ADX -"
     lines.append(f"<b>Trend</b>: {_arrow(trend['direction'])} {e(trend['direction'].upper())} ({trend['strength']}) \u00b7 "
@@ -44,7 +49,6 @@ def analysis_report(a):
     lines.append(f"RSI {ind['rsi'] if ind['rsi'] is not None else '-'} \u00b7 "
                  f"MACD hist {ind['macd_hist'] if ind['macd_hist'] is not None else '-'} \u00b7 "
                  f"ATR {price(ind['atr'])}")
-    lines.append(f"Bollinger: [{price(ind['bb']['lower'])}, {price(ind['bb']['mid'])}, {price(ind['bb']['upper'])}]")
     if a["levels"]["support"] or a["levels"]["resistance"]:
         sup = " / ".join(price(s) for s in a["levels"]["support"]) or "-"
         res = " / ".join(price(r) for r in a["levels"]["resistance"]) or "-"
@@ -58,10 +62,10 @@ def analysis_report(a):
         lines.append(f"Stop loss : <b>{price(spec['sl'])}</b>")
         lines.append(f"Take profit 1: <b>{price(spec['tp1'])}</b> \u00b7 Take profit 2: <b>{price(spec['tp2'])}</b>")
         lines.append(f"Risk/reward {spec['rr']:.1f} \u00b7 Risk/trade {spec['risk_pct']:.1f}% of capital")
-        lines.append(f"Confidence: <b>{a['confidence']:.0f}/100</b>")
+        lines.append(f"Confidence: <b>{a['confidence']:.0f}/100</b> {meter(a['confidence'])}")
     else:
         lines.append(f"<b>Signal</b>: {BADGE[a['side']]} No trade setup \u2014 trend {trend['direction']}, "
-                     f"confidence {a['confidence']:.0f}/100")
+                     f"confidence {a['confidence']:.0f}/100 {meter(a['confidence'])}")
     lines.append("")
 
     if a["reasons"]:
@@ -93,7 +97,10 @@ def signal_message(sig, source="watch"):
     lines.append(f"Entry zone: <b>{price(sig['entry_zone'][0])}</b> \u2013 <b>{price(sig['entry_zone'][1])}</b>")
     lines.append(f"Stop loss : <b>{price(sig['sl'])}</b> \u00b7 RR target {sig['rr']:.1f}")
     lines.append(f"TP1: <b>{price(sig['tp1'])}</b> \u00b7 TP2: <b>{price(sig['tp2'])}</b> \u00b7 "
-                 f"Risk {sig['risk_pct']:.1f}% \u00b7 Confidence {sig['confidence']:.0f}%")
+                 f"Risk {sig['risk_pct']:.1f}% \u00b7 Confidence {sig['confidence']:.0f}% {meter(sig['confidence'])}")
+    sup = " / ".join(price(s) for s in (sig.get("support") or [])) or "-"
+    res = " / ".join(price(r) for r in (sig.get("resistance") or [])) or "-"
+    lines.append(f"Levels \u2014 support: {sup} \u00b7 resistance: {res}")
     if sig["reasons"]:
         lines.append("Why: " + "; ".join(e(r) for r in sig["reasons"][:3]))
     lines.append("\U000026a0\ufe0f Not financial advice.")
@@ -102,11 +109,15 @@ def signal_message(sig, source="watch"):
 
 def quote_report(pair, tick):
     e = escape
-    return (
-        f"{e(pair)} \u2014 <b>{price(tick['price'])}</b>\n"
-        f"24h change: {tick['change_pct']:+.2f}% \u00b7 High {price(tick['high'])} \u00b7 Low {price(tick['low'])}\n"
-        f"Volume: {tick['volume']:,.0f} ({tick['quote']}) \u00b7 Data: {tick.get('mode', 'live')}"
-    )
+    bar = position_bar(tick.get("low"), tick.get("high"), tick.get("price"))
+    lines = [
+        f"\U0001f4b2 <b>{e(pair)}</b> \u2014 <b>{price(tick['price'])}</b>",
+        f"24h change: {tick['change_pct']:+.2f}% \u00b7 High {price(tick['high'])} \u00b7 Low {price(tick['low'])}",
+    ]
+    if bar:
+        lines.append(f"Day range: {price(tick['low'])} {bar} {price(tick['high'])}")
+    lines.append(f"Volume: {tick['volume']:,.0f} ({tick['quote']}) \u00b7 Data: {tick.get('mode', 'live')}")
+    return "\n".join(lines)
 
 
 DIV = "\u2500" * 20
@@ -117,6 +128,37 @@ def meter(value, maximum=100.0, width=8):
         return "\u25b1" * width
     filled = max(0, min(width, round(value / maximum * width)))
     return "\u25b0" * filled + "\u25b1" * (width - filled)
+
+
+_BLOCKS = "\u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
+
+
+def sparkline(values, width=16):
+    """Tiny text sparkline from a numeric series. '' when unusable."""
+    try:
+        vals = [float(v) for v in list(values)[-width:] if v is not None]
+    except Exception:
+        return ""
+    if len(vals) < 2:
+        return ""
+    lo, hi = min(vals), max(vals)
+    if hi <= lo:
+        return "\u2500" * len(vals)
+    n = len(_BLOCKS) - 1
+    return "".join(_BLOCKS[min(n, int((v - lo) / (hi - lo) * n))] for v in vals)
+
+
+def position_bar(lo, hi, px, width=12):
+    """Where px sits inside [lo, hi]: \u2500\u2500\u25cf\u2500\u2500 style bar. '' when unusable."""
+    try:
+        lo, hi, px = float(lo), float(hi), float(px)
+    except Exception:
+        return ""
+    if not (hi > lo):
+        return ""
+    pos = max(0.0, min(1.0, (px - lo) / (hi - lo)))
+    idx = min(width - 1, int(round(pos * (width - 1))))
+    return "\u2500" * idx + "\u25cf" + "\u2500" * (width - 1 - idx)
 
 
 def pillars_line(pillars, labels):
@@ -486,11 +528,12 @@ def news_block(news):
 
 def watch_list(rows):
     if not rows:
-        return "No active watches. Add one with /watch PAIR STYLE MODE"
-    lines = ["<b>Active watch list</b>"]
+        return ("No active watches yet \u2014 add your first alert with "
+                "/watch PAIR STYLE MODE")
+    lines = ["\U0001f440 <b>Active watch list</b>"]
     for w in rows:
-        lines.append(f"\u2022 {w['pair']} \u2014 {w['style']}/{w['mode']} "
-                      f"(last alert {('yes' if w['last_signal_ts'] else 'no')})")
+        state = "\u2705 alerted" if w["last_signal_ts"] else "\u23f3 listening"
+        lines.append(f"\u2022 <b>{w['pair']}</b> \u00b7 {w['style']}/{w['mode']} \u00b7 {state}")
     return "\n".join(lines)
 
 
@@ -509,9 +552,9 @@ def plans_text(trial_eligible):
     from .. import billing as _b
     from .. import constants as _c
     lines = ["\U0001f48e <b>EzyAi PRO</b> \u2014 alerts, autopilot, deep research.",
-             "Analyze stays free on every plan.", ""]
+             "Analyze stays free on every plan.", DIV]
     for tid in _c.PLAN_ORDER:
-        lines.append("\u2022 " + _b.tier_line(tid))
+        lines.append("\u25b8 " + _b.tier_line(tid))
     lines.append("")
     if trial_eligible:
         lines.append(f"\U0001f381 New here? Take the <b>{_c.TRIAL_DAYS}-day free trial</b> first \u2014 "
@@ -532,8 +575,10 @@ def account_text(status, watches_n, autopilot_on, comped=False):
         date = datetime.datetime.fromtimestamp(until, datetime.timezone.utc).strftime("%d %b %Y")
         state = f"<b>PRO</b> until {date}"
     elif plan == "trial":
+        from .. import constants as _c
         left = max(0, int((until - _t.time()) / 86400) + 1)
-        state = f"<b>Trial</b> \u00b7 {left} day(s) left"
+        state = (f"<b>Trial</b> \u00b7 {left} day(s) left "
+                 f"{meter(left, _c.TRIAL_DAYS, width=3)}")
     else:
         state = "<b>Free</b> (Analyze only)"
     lines = ["\U0001f464 <b>Your account</b>", f"Plan: {state}",
@@ -558,9 +603,12 @@ def expiry_nudge_text():
 def dashboard_view(watches, pilot, data_mode):
     lines = ["\U0001f4cb <b>EzyAi dashboard</b>"]
     if watches:
-        shown = ", ".join(f"{w['pair']} ({w['style']}/{w['mode']})" for w in watches[:4])
+        parts = []
+        for w in watches[:4]:
+            dot = "\U0001f7e2" if w.get("last_signal_ts") else "\U0001f7e1"
+            parts.append(f"{dot} <b>{w['pair']}</b> ({w['style']}/{w['mode']})")
         extra = f" +{len(watches) - 4} more" if len(watches) > 4 else ""
-        lines.append(f"\U0001f440 Watching ({len(watches)}): {shown}{extra}")
+        lines.append(f"\U0001f440 Watching ({len(watches)}): " + ", ".join(parts) + extra)
     else:
         lines.append("\U0001f440 Watching (0): tap Watchlist to add your first alert.")
     if pilot is not None:
@@ -574,21 +622,22 @@ def dashboard_view(watches, pilot, data_mode):
 
 def confirm_watch_text(pair, style, mode, check_s, rr, risk_pct):
     return (
-        f"\U0001f514 Confirm watch\n<b>{pair}</b> \u00b7 {style}/{mode}\n"
-        f"Checks every {check_s}s \u00b7 target RR {rr} \u00b7 risk {risk_pct:.1f}%/trade."
+        f"\U0001f514 <b>Confirm watch</b>\n<b>{pair}</b> \u00b7 {style}/{mode}\n"
+        f"Checks every {check_s}s \u00b7 target RR {rr} \u00b7 risk {risk_pct:.1f}%/trade.\n"
+        "You will get a signal the moment a setup passes your risk rules."
     )
 
 
 def confirm_auto_text(style, mode, daily_limit):
     return (
-        f"\U0001f916 Confirm autopilot\n{style}/{mode} \u00b7 random pairs \u00b7 "
+        f"\U0001f916 <b>Confirm autopilot</b>\n{style}/{mode} \u00b7 random pairs \u00b7 "
         f"up to {daily_limit} signals/day.\n"
         "You can stop it anytime from the dashboard."
     )
 
 
 def watch_added_text(pair, style, mode):
-    return (f"\u2705 Watch live: <b>{pair}</b> \u00b7 {style}/{mode}\n"
+    return (f"\u2705 <b>Watch live:</b> {pair} \u00b7 {style}/{mode}\n"
             "You will get a signal the moment a setup passes your risk rules.")
 
 
@@ -608,17 +657,23 @@ def autopilot_view(pilots):
 
 def help_text():
     return (
-        "<b>EzyAi commands</b>\n\n"
-        "/analyze \u2014 on-demand market analysis with entry/exit, level-based flow\n"
-        "/watch PAIR STYLE MODE \u2014 live alerts for a pair (crypto, forex, stock, cfd)\n"
+        "\U0001f4d6 <b>EzyAi commands</b>\n\n"
+        "\U0001f50d <b>Research (free)</b>\n"
+        "/analyze \u2014 market analysis with entry, stop and targets\n"
+        "/quote PAIR \u2014 quick live price\n"
+        "/fundamentals PAIR \u2014 stocks, crypto, forex and CFD research\n\n"
+        "\U0001f512 <b>PRO \u2014 alerts & automation</b>\n"
+        "/watch PAIR STYLE MODE \u2014 live alerts for a pair\n"
         "    STYLE: scalping | intraday | swing\n"
         "    MODE:  safe | normal | aggressive\n"
         "/watches \u2014 list your active watches\n"
         "/unwatch PAIR \u2014 stop alerts for a pair\n"
-        "/fundamentals PAIR \u2014 fundamentals + links for a pair\n"
-        "/autopilot STYLE MODE \u2014 random-pair auto signals (2 settings only)\n"
-        "/stopautopilot \u2014 stop random signals\n"
-        "/quote PAIR \u2014 quick live price\n"
+        "/autopilot STYLE MODE \u2014 random-pair auto signals\n"
+        "/stopautopilot \u2014 stop random signals\n\n"
+        "\U0001f464 <b>Account</b>\n"
+        "/plans \u2014 trial and PRO plans\n"
+        "/account \u2014 plan, watches and autopilot status\n"
+        "/dashboard \u2014 everything at a glance\n"
         "/help \u2014 this message\n\n"
         "Examples: crypto BTCUSD \u00b7 forex EURUSD \u00b7 stock AAPL \u00b7 cfd XAUUSD\n"
         "Modes affect frequency and risk: safe (fewer, tighter), aggressive (more, wider)."
