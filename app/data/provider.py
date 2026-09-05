@@ -174,6 +174,72 @@ class YahooProvider:
         return out
 
 
+class CcxtProvider:
+    """Public-only multi-exchange crypto fallback (no API key).
+
+    Used only when every Binance host fails. ccxt is imported lazily
+    inside the methods so the dependency never loads (and never costs
+    RAM) during normal operation.
+    """
+
+    EXCHANGES = ("kraken", "coinbase")
+
+    def __init__(self, timeout=10):
+        self.timeout = timeout
+
+    @staticmethod
+    def to_ccxt_symbol(symbol):
+        s = symbol.upper()
+        if s.endswith("USDT"):
+            return s[:-4] + "/USDT"
+        if s.endswith("USDC"):
+            return s[:-4] + "/USDC"
+        return s
+
+    def _exchange(self, ccxt_mod, name):
+        cls = getattr(ccxt_mod, name)
+        return cls({"enableRateLimit": True, "timeout": self.timeout * 1000})
+
+    def _try_each(self, op, symbol, interval=None, limit=None):
+        import ccxt  # lazy: keeps the normal path light
+        last_error = None
+        ccxt_symbol = self.to_ccxt_symbol(symbol)
+        for name in self.EXCHANGES:
+            try:
+                ex = self._exchange(ccxt, name)
+                if ccxt_symbol not in ex.load_markets():
+                    continue
+                if op == "ohlcv":
+                    return ex.fetch_ohlcv(ccxt_symbol, timeframe=interval,
+                                          limit=limit)
+                return ex.fetch_ticker(ccxt_symbol)
+            except Exception as exc:
+                last_error = exc
+                continue
+        raise last_error if last_error else ValueError(
+            f"No ccxt market: {symbol}")
+
+    def fetch_klines(self, symbol, interval, limit=200):
+        raw = self._try_each("ohlcv", symbol, interval, limit)
+        return [make_candle(int(k[0]), k[1], k[2], k[3], k[4],
+                            k[5] if k[5] is not None else 0.0)
+                for k in raw[-limit:]]
+
+    def fetch_ticker(self, symbol):
+        t = self._try_each("ticker", symbol)
+        last = t.get("last") or t.get("close")
+        return {
+            "price": float(last),
+            "change_pct": float(t.get("percentage") or 0.0),
+            "high": float(t.get("high") or last),
+            "low": float(t.get("low") or last),
+            "volume": float(t.get("quoteVolume") or t.get("baseVolume") or 0.0),
+            "kind": constants.KIND_CRYPTO,
+            "asset": symbol.upper().replace("USDT", "").replace("USDC", ""),
+            "quote": "USDC" if symbol.upper().endswith("USDC") else "USDT",
+        }
+
+
 class SyntheticProvider:
     def __init__(self, seed_pairs=None):
         self.pairs = set(seed_pairs or [])
@@ -242,6 +308,7 @@ class SyntheticProvider:
 class DataHub:
     def __init__(self, allow_demo=False):
         self.binance = BinanceProvider()
+        self.ccxt = CcxtProvider()
         self.forex = YahooProvider(kind=constants.KIND_FOREX)
         self.stock = YahooProvider(kind=constants.KIND_STOCK)
         self.cfd = YahooProvider(kind=constants.KIND_CFD)
@@ -316,45 +383,64 @@ class DataHub:
         try:
             partner = self.partner(symbol)
         except ValueError:
-            if self.allow_demo:
-                partner = self.demo
-                self.mode = "demo"
-            else:
-                raise
-        try:
-            candles = partner.fetch_klines(sym, interval, limit)
-            if partner is not self.demo:
+            partner = None
+        last_error = None
+        if partner is not None:
+            try:
+                candles = partner.fetch_klines(sym, interval, limit)
+                if partner is not self.demo:
+                    self.mode = "live"
+                return candles
+            except Exception as exc:
+                last_error = exc
+        if kind == constants.KIND_CRYPTO:
+            try:
+                candles = self.ccxt.fetch_klines(sym, interval, limit)
                 self.mode = "live"
-            return candles
-        except Exception:
-            if self.allow_demo:
-                self.mode = "demo"
-                return self.demo.fetch_klines(sym, interval, limit)
-            raise
+                return candles
+            except Exception:
+                pass
+        if self.allow_demo:
+            self.mode = "demo"
+            return self.demo.fetch_klines(sym, interval, limit)
+        if partner is None:
+            raise ValueError(f"Unknown symbol: {symbol}")
+        raise last_error
 
     def fetch_ticker(self, symbol):
         kind, sym = self.resolve(symbol)
         try:
             partner = self.partner(symbol)
         except ValueError:
-            partner = self.demo if self.allow_demo else None
-            if partner is None:
-                raise
-        try:
-            tick = partner.fetch_ticker(sym)
-            if partner is not self.demo:
-                self.mode = "live"
-            else:
-                self.mode = "demo"
-            tick["symbol"] = symbol.upper()
-            return tick
-        except Exception:
-            if self.allow_demo:
-                self.mode = "demo"
-                tick = self.demo.fetch_ticker(sym)
+            partner = None
+        last_error = None
+        if partner is not None:
+            try:
+                tick = partner.fetch_ticker(sym)
+                if partner is not self.demo:
+                    self.mode = "live"
+                else:
+                    self.mode = "demo"
                 tick["symbol"] = symbol.upper()
                 return tick
-            raise
+            except Exception as exc:
+                last_error = exc
+        if kind == constants.KIND_CRYPTO:
+            try:
+                tick = self.ccxt.fetch_ticker(sym)
+                self.mode = "live"
+                tick["symbol"] = symbol.upper()
+                return tick
+            except Exception:
+                pass
+        if self.allow_demo:
+            self.mode = "demo"
+            tick = self.demo.fetch_ticker(sym)
+            tick["symbol"] = symbol.upper()
+            return tick
+        if partner is None:
+            raise ValueError(f"Unknown symbol: {symbol}")
+        raise last_error
 
     def random_symbol(self, kind=None, exclude=()):
         import random
