@@ -1,6 +1,6 @@
 import logging
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -72,6 +72,11 @@ class Bot:
     async def _reply(self, update, text, **kw):
         if not text:
             return
+        # Actively keep the (removed) bottom reply-keyboard hidden: clients
+        # cache the last keyboard until told otherwise, so every plain
+        # message re-asserts its removal. Messages with inline buttons
+        # can't carry a second markup and are unaffected either way.
+        kw.setdefault("reply_markup", ReplyKeyboardRemove())
         r = await update.effective_chat.send_message(
             text, parse_mode=ParseMode.HTML,
             disable_web_page_preview=True, **kw)
@@ -104,11 +109,17 @@ class Bot:
 
     async def cmd_start(self, update, ctx):
         ctx.user_data.pop(self._flow_key(), None)
+        # One-time cleanup confirmation: hides any stale bottom button bar
+        # cached by the client (plain message carries the removal).
+        await self._reply(
+            update,
+            "\U0001f9f9 Cleaned up \u2014 the old button bar is gone. "
+            "From now on everything lives in the chat buttons "
+            "and the Menu (\u2630) commands.")
         await self._reply(
             update,
             "Welcome to <b>EzyAi</b> \u2014 live market analysis, "
-            "alerts and auto signals.\n"
-            "Tap a shortcut below, or open <b>Menu</b> (\u2630) for all commands.",
+            "alerts and auto signals.",
             reply_markup=ui.help_keyboard())
 
     async def cmd_help(self, update, ctx):

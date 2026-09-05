@@ -16,6 +16,17 @@ def _callbacks(markup):
     return [b.callback_data for row in markup.inline_keyboard for b in row]
 
 
+def test_no_reply_keyboard_anywhere():
+    # The bottom reply-keyboard was removed for good: only inline buttons
+    # (chat-attached, silent) plus the / command menu remain.
+    import re
+    app_dir = Path(__file__).resolve().parent.parent / "app"
+    for py in app_dir.rglob("*.py"):
+        for line in py.read_text().splitlines():
+            assert "ReplyKeyboardMarkup" not in line, f"{py.name}: {line}"
+            assert not re.match(r"\s*main_keyboard\s*\(", line)
+
+
 def test_menu_routes_all_labels():
     for label in ui.MENU_LABELS:
         assert ui.route_menu(label) is not None
