@@ -7,9 +7,11 @@ from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
     MessageHandler,
+    PreCheckoutQueryHandler,
     filters,
 )
 
+from . import billing
 from . import constants
 from . import ui
 from .analysis import sentiment as _sent
@@ -21,11 +23,12 @@ logger = logging.getLogger(__name__)
 
 
 class Bot:
-    def __init__(self, token, hub, service, demo_ok=False):
+    def __init__(self, token, hub, service, demo_ok=False, pay_config=None):
         self.hub = hub
         self.service = service
         self.fund = Fundamentals()
         self.demo_ok = demo_ok
+        self.pay = dict(pay_config or {})
         self.app = Application.builder().token(token).build()
         self._register()
 
@@ -43,7 +46,11 @@ class Bot:
         a.add_handler(CommandHandler("autopilot", self.cmd_autopilot))
         a.add_handler(CommandHandler("stopautopilot", self.cmd_stop_autopilot))
         a.add_handler(CommandHandler("quote", self.cmd_quote))
+        a.add_handler(CommandHandler("plans", self.cmd_plans))
+        a.add_handler(CommandHandler("account", self.cmd_account))
         a.add_handler(CallbackQueryHandler(self.cb_flow, pattern=r"^ezy:"))
+        a.add_handler(PreCheckoutQueryHandler(self.on_precheckout))
+        a.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, self.on_paid))
         a.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.on_text))
         a.job_queue.run_repeating(self._job, interval=30, first=30)
 
@@ -68,6 +75,13 @@ class Bot:
             await self.service.tick(send)
         except Exception as exc:
             logger.warning("tick failed: %s", exc)
+        try:
+            for chat_id in self.service.expiry_nudges():
+                await self.app.bot.send_message(
+                    chat_id, msg.expiry_nudge_text(),
+                    parse_mode=ParseMode.HTML)
+        except Exception as exc:
+            logger.warning("nudge failed: %s", exc)
 
     async def _reply(self, update, text, **kw):
         if not text:
@@ -126,6 +140,8 @@ class Bot:
         watches = self.service.list_watches(chat_id)
         pilot = self.service.autopilots.get(str(chat_id))
         text = msg.dashboard_view(watches, pilot, self.hub.mode)
+        if not self.service.is_pro(chat_id):
+            text += "\nPlan: <b>Free</b> \u2014 unlock alerts + research: /plans"
         kb = ui.refresh_keyboard()
         if update.callback_query is not None:
             await self._edit_or_send(update.callback_query, text, kb)
@@ -218,7 +234,7 @@ class Bot:
             return
         await self._send_fundamentals(update, ctx.args[0].upper(), update, ctx)
 
-    def _fundamentals_text(self, pair):
+    def _fundamentals_text(self, pair, pro=True):
         resolved = self.hub.resolve_loose(pair)
         if not resolved:
             return None
@@ -235,19 +251,22 @@ class Bot:
                 data = self.fund.cfd(sym, tag=pair)
         except Exception:
             data = None
-        text = msg.fundamentals_report(kind, pair, data, self.hub.mode)
+        text = msg.fundamentals_report(kind, pair, data, self.hub.mode, pro=pro)
         links = self.fund.links(kind, pair)
         try:
             news = self.fund.news(constants.base_asset(pair), limit=4)
         except Exception:
             news = []
         text += msg.related_reading(kind, pair, links, news)
+        if not pro:
+            text += msg.pro_upsell_note()
         return text
 
     async def _send_fundamentals(self, update, pair, ctx, query=None):
         await self._typing(update, ctx)
+        pro = self.service.is_pro(update.effective_chat.id)
         try:
-            text = self._fundamentals_text(pair)
+            text = self._fundamentals_text(pair, pro=pro)
         except Exception:
             text = None
         if not text:
@@ -266,6 +285,9 @@ class Bot:
     # -- watch --------------------------------------------------------------
 
     async def cmd_watch(self, update, ctx):
+        if not self.service.is_pro(update.effective_chat.id):
+            await self._send_pro_gate(update, "Live watch alerts")
+            return
         args = ctx.args
         if len(args) < 3:
             await self._start_flow(update, ctx, "watch")
@@ -335,6 +357,9 @@ class Bot:
         if len(args) < 2:
             await self._auto_entry(update, ctx)
             return
+        if not self.service.is_pro(update.effective_chat.id):
+            await self._send_pro_gate(update, "Autopilot signals")
+            return
         style, mode = args[0].lower(), args[1].lower()
         if style not in constants.STYLES or mode not in constants.MODES:
             await self._reply(update, "Unknown style/mode \u2014 pick from the buttons:",
@@ -345,6 +370,9 @@ class Bot:
 
     async def _auto_entry(self, update, ctx, query=None):
         """Autopilot button: running -> status + stop, else setup flow."""
+        if not self.service.is_pro(update.effective_chat.id):
+            await self._send_pro_gate(update, "Autopilot signals", query)
+            return
         pilot = self.service.autopilots.get(str(update.effective_chat.id))
         if pilot is not None:
             text = (f"\U0001f916 Autopilot is <b>ON</b> \u00b7 {pilot.style}/{pilot.mode}\n"
@@ -380,9 +408,176 @@ class Bot:
                 InlineKeyboardButton("\u2715 Cancel", callback_data="ezy:cancel"),
             ]]))
 
+    # -- monetization -------------------------------------------------------
+
+    def _trial_eligible(self, chat_id):
+        return not self.service.plan_status(chat_id).get("trial_used", True)
+
+    async def _send_pro_gate(self, update, feature, query=None):
+        chat_id = update.effective_chat.id
+        text = msg.pro_gate(feature, self._trial_eligible(chat_id))
+        kb = ui.plans_keyboard(self._trial_eligible(chat_id))
+        if query is not None:
+            await self._edit_or_send(query, text, kb)
+        else:
+            await self._reply(update, text, reply_markup=kb)
+
+    async def cmd_plans(self, update, ctx):
+        chat_id = update.effective_chat.id
+        eligible = self._trial_eligible(chat_id)
+        await self._reply(update, msg.plans_text(eligible),
+                          reply_markup=ui.plans_keyboard(eligible))
+
+    async def _send_plans(self, query, chat_id):
+        eligible = self._trial_eligible(chat_id)
+        await self._edit_or_send(query, msg.plans_text(eligible),
+                                 ui.plans_keyboard(eligible))
+
+    async def cmd_account(self, update, ctx):
+        chat_id = update.effective_chat.id
+        status = self.service.plan_status(chat_id)
+        comped = self.service.is_comped(chat_id)
+        watches = self.service.list_watches(chat_id)
+        pilot = self.service.autopilots.get(str(chat_id))
+        text = msg.account_text(status, len(watches), pilot is not None,
+                                comped=comped)
+        if status["plan"] == "free" and not comped:
+            await self._reply(update, text, reply_markup=ui.plans_keyboard(
+                self._trial_eligible(chat_id)))
+        else:
+            await self._reply(update, text)
+
+    async def _send_account(self, query, chat_id):
+        status = self.service.plan_status(chat_id)
+        comped = self.service.is_comped(chat_id)
+        watches = self.service.list_watches(chat_id)
+        pilot = self.service.autopilots.get(str(chat_id))
+        text = msg.account_text(status, len(watches), pilot is not None,
+                                comped=comped)
+        if status["plan"] == "free" and not comped:
+            await self._edit_or_send(
+                query, text, ui.plans_keyboard(self._trial_eligible(chat_id)))
+        else:
+            await self._edit_or_send(query, text)
+
+    async def _begin_pay(self, update, ctx, tier, query=None):
+        plan = billing.tier(tier)
+        if not plan:
+            return
+        chat_id = update.effective_chat.id
+        text = (f"\U0001f48e <b>EzyAi PRO \u2014 {plan['label']}</b> "
+                f"${plan['usd']:.2f}\nHow would you like to pay?")
+        kb = ui.pay_methods_keyboard(tier)
+        if query is not None:
+            await self._edit_or_send(query, text, kb)
+        else:
+            await self._reply(update, text, reply_markup=kb)
+
+    async def _pay_stars(self, update, ctx, tier, query=None):
+        from telegram import LabeledPrice
+        plan = billing.tier(tier)
+        chat_id = update.effective_chat.id
+        try:
+            await ctx.bot.send_invoice(
+                chat_id, f"EzyAi PRO \u2014 {plan['label']}",
+                "Live alerts, autopilot signals, deep research.",
+                billing.encode_payload(tier, "stars", chat_id),
+                provider_token="", currency="XTR",
+                prices=[LabeledPrice(plan["label"], plan["stars"])])
+        except Exception as exc:
+            logger.warning("stars invoice failed: %s", exc)
+            text = ("Stars checkout hiccup \u2014 please try again or use card/USDT.")
+            if query is not None:
+                await self._edit_or_send(query, text)
+            else:
+                await self._reply(update, text)
+
+    async def _pay_card(self, update, ctx, tier, query=None):
+        from telegram import LabeledPrice
+        token = (self.pay or {}).get("provider_token") or ""
+        plan = billing.tier(tier)
+        chat_id = update.effective_chat.id
+        if not token:
+            text = ("Card payments are being wired up \u2014 use Stars "
+                    "for instant PRO, or USDT below.")
+            if query is not None:
+                await self._edit_or_send(query, text)
+            else:
+                await self._reply(update, text)
+            return
+        try:
+            await ctx.bot.send_invoice(
+                chat_id, f"EzyAi PRO \u2014 {plan['label']}",
+                "Live alerts, autopilot signals, deep research.",
+                billing.encode_payload(tier, "card", chat_id),
+                provider_token=token, currency="USD",
+                prices=[LabeledPrice(plan["label"], int(plan["usd"] * 100))])
+        except Exception as exc:
+            logger.warning("card invoice failed: %s", exc)
+            text = ("Card checkout hiccup \u2014 please try again or use Stars/USDT.")
+            if query is not None:
+                await self._edit_or_send(query, text)
+            else:
+                await self._reply(update, text)
+
+    async def _pay_usdt(self, update, ctx, tier, query=None):
+        plan = billing.tier(tier)
+        address = (self.pay or {}).get("usdt_address") or ""
+        admin_id = (self.pay or {}).get("admin_id")
+        if not address or not admin_id:
+            text = ("Manual USDT is coming online soon \u2014 use Stars "
+                    "for instant PRO.")
+            if query is not None:
+                await self._edit_or_send(query, text)
+            else:
+                await self._reply(update, text)
+            return
+        text = (f"\u20ae Send exactly <b>${plan['usd']:.2f} USDT</b> (TRC-20) to:\n"
+                f"<code>{address}</code>\n"
+                "Then tap below \u2014 an admin approves within a few hours.")
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("\u2705 I've paid", callback_data=ui.cb_paid(tier)),
+            InlineKeyboardButton("\u2715 Cancel", callback_data="ezy:cancel"),
+        ]])
+        if query is not None:
+            await self._edit_or_send(query, text, kb)
+        else:
+            await self._reply(update, text, reply_markup=kb)
+
+    async def on_precheckout(self, update, ctx):
+        q = update.pre_checkout_query
+        ok = billing.decode_payload(q.invoice_payload) is not None
+        try:
+            await q.answer(ok=ok, error_message=None if ok else "Order expired \u2014 start again from /plans.")
+        except Exception:
+            pass
+
+    async def on_paid(self, update, ctx):
+        sp = update.message.successful_payment
+        info = billing.decode_payload(sp.invoice_payload)
+        if not info:
+            return
+        months = constants.PLANS[info["tier"]]["months"]
+        until = self.service.activate_pro(info["chat_id"], months)
+        import datetime
+        date = datetime.datetime.fromtimestamp(until, datetime.timezone.utc).strftime("%d %b %Y")
+        try:
+            await ctx.bot.send_message(
+                info["chat_id"],
+                f"\u2705 <b>PRO activated</b> \u00b7 {info['tier']} until {date}.\n"
+                "Your watches resume automatically. Enjoy!",
+                parse_mode=ParseMode.HTML)
+        except Exception as exc:
+            logger.warning("pro confirm failed: %s", exc)
+        if update.effective_chat.id != info["chat_id"]:
+            await self._reply(update, "Payment received \u2014 PRO activated. Enjoy!")
+
     # -- flow engine --------------------------------------------------------
 
     async def _start_flow(self, update, ctx, flow, pair=None):
+        if flow == "watch" and not self.service.is_pro(update.effective_chat.id):
+            await self._send_pro_gate(update, "Live watch alerts")
+            return
         ctx.user_data[self._flow_key()] = {"flow": flow, "page": 0}
         if pair:
             ctx.user_data[self._flow_key()]["pair"] = pair
@@ -445,6 +640,9 @@ class Bot:
             elif target == "help":
                 await self._edit_or_send(query, msg.help_text(), ui.help_keyboard())
             elif target in ("analyze", "watch", "fund", "quote"):
+                if target == "watch" and not self.service.is_pro(chat_id):
+                    await self._send_pro_gate(update, "Live watch alerts", query)
+                    return
                 ctx.user_data[self._flow_key()] = {"flow": target, "page": 0}
                 if pair:
                     if not self.hub.resolve_loose(pair):
@@ -565,6 +763,9 @@ class Bot:
             return
 
         if action == "watch_go":
+            if not self.service.is_pro(chat_id):
+                await self._send_pro_gate(update, "Live watch alerts", query)
+                return
             pair, style, mode = flow.get("pair"), flow.get("style"), flow.get("mode")
             if not pair or not style or not mode:
                 await self._restart(update, ctx, "watch", query)
@@ -577,6 +778,9 @@ class Bot:
             return
 
         if action == "auto_go":
+            if not self.service.is_pro(chat_id):
+                await self._send_pro_gate(update, "Autopilot signals", query)
+                return
             style, mode = flow.get("style"), flow.get("mode")
             if not style or not mode:
                 await self._restart(update, ctx, "auto", query)
@@ -619,6 +823,100 @@ class Bot:
 
         if action == "dash":
             await self._send_dashboard(chat_id, update, ctx)
+            return
+
+        if action == "plans":
+            await self._send_plans(query, chat_id)
+            return
+
+        if action == "trial":
+            until = self.service.start_trial(chat_id)
+            ctx.user_data.pop(self._flow_key(), None)
+            if until is None:
+                await self._edit_or_send(
+                    query, "Trial already used on this account \u2014 pick a plan:",
+                    ui.plans_keyboard(False))
+                return
+            import datetime
+            date = datetime.datetime.fromtimestamp(until, datetime.timezone.utc).strftime("%d %b")
+            await self._edit_or_send(
+                query,
+                f"\U0001f381 <b>Trial on!</b> Full PRO until {date}.\n"
+                "Try a watch, autopilot and deep fundamentals \u2014 on the house.",
+                ui.help_keyboard())
+            return
+
+        if action == "pay":
+            tier, method = cb["tier"], cb["method"]
+            if tier not in constants.PLANS or method not in billing.METHODS:
+                return
+            if method == "stars":
+                await self._pay_stars(update, ctx, tier, query)
+            elif method == "card":
+                await self._pay_card(update, ctx, tier, query)
+            elif method == "usdt":
+                await self._pay_usdt(update, ctx, tier, query)
+            return
+
+        if action == "paid":
+            tier = cb["tier"]
+            plan = billing.tier(tier)
+            admin_id = (self.pay or {}).get("admin_id")
+            if not plan or not admin_id:
+                await self._edit_or_send(query, "Payment desk offline \u2014 use Stars for instant PRO.")
+                return
+            user = update.effective_user
+            name = (user.full_name if user else f"user {chat_id}") or f"user {chat_id}"
+            try:
+                await ctx.bot.send_message(
+                    admin_id,
+                    f"\U0001f4b0 USDT claim: <b>{name}</b> (id <code>{chat_id}</code>)\n"
+                    f"claims <b>{plan['label']}</b> \u2014 ${plan['usd']:.2f}. Approve?",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("\u2705 Approve",
+                                             callback_data=ui.cb_admin_ok(chat_id, tier)),
+                        InlineKeyboardButton("\u274c Reject",
+                                             callback_data=ui.cb_admin_no(chat_id)),
+                    ]]))
+                await self._edit_or_send(
+                    query, "Claim sent \u2014 an admin approves within a few hours. "
+                           "You will get PRO automatically.")
+            except Exception as exc:
+                logger.warning("usdt claim forward failed: %s", exc)
+                await self._edit_or_send(query, "Could not reach the payment desk \u2014 try Stars.")
+            return
+
+        if action in ("admin_ok", "admin_no"):
+            admin_id = (self.pay or {}).get("admin_id")
+            if admin_id is None or update.effective_user.id != admin_id:
+                await query.answer("Admins only.", show_alert=True)
+                return
+            target = cb["chat"]
+            if action == "admin_ok":
+                months = constants.PLANS[cb["tier"]]["months"]
+                until = self.service.activate_pro(target, months)
+                import datetime
+                date = datetime.datetime.fromtimestamp(until, datetime.timezone.utc).strftime("%d %b %Y")
+                try:
+                    await ctx.bot.send_message(
+                        target,
+                        f"\u2705 <b>PRO activated</b> \u00b7 {cb['tier']} until {date}.\n"
+                        "Your watches resume automatically. Enjoy!",
+                        parse_mode=ParseMode.HTML)
+                except Exception as exc:
+                    logger.warning("admin-ok notify failed: %s", exc)
+                await self._edit_or_send(query, f"Approved PRO {cb['tier']} for {target}.")
+            else:
+                try:
+                    await ctx.bot.send_message(
+                        target, "Your USDT claim was not approved. "
+                                "Check the amount/address and tap \u201cI've paid\u201d again, "
+                                "or pay instantly with Stars via /plans.",
+                        parse_mode=ParseMode.HTML)
+                except Exception as exc:
+                    logger.warning("admin-no notify failed: %s", exc)
+                await self._edit_or_send(query, f"Rejected claim from {target}.")
             return
 
     async def _restart(self, update, ctx, flow_name, query):

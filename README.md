@@ -29,6 +29,22 @@ every result.
   refresh button; all actions live in the persistent button menu.
 - Also: `/watches` (per-row remove buttons), `/unwatch`, `/quote`, `/help`.
 
+## Monetization (Free vs PRO)
+
+- **Free**: Analyze (+Quote, Dashboard preview). Everything else upsells.
+- **PRO**: live Watch alerts, Autopilot signals, deep Fundamentals
+  (scores, DCF fair value, COT positioning, macro verdict + outlook).
+- **Plans**: 1 month $14.99 · **6 months $44.99 (MOST POPULAR, save 50%)** ·
+  12 months $99.99 (save 44%). 3-day free trial, once per user.
+- **Payments**: Telegram Stars + card auto-approve via invoices;
+  USDT manual (TRC-20) with admin approve/deny buttons.
+- **Team access**: `PRO_ACCESS_IDS` (comma-separated chat ids, always PRO,
+  editable via secret); `ADMIN_TELEGRAM_ID` approves USDT claims.
+  The two lists are independent.
+- Expiry auto-downgrades; watches stay stored and resume on PRO.
+  Env: `PAYMENT_PROVIDER_TOKEN`, `USDT_ADDRESS`, `ADMIN_TELEGRAM_ID`,
+  `PRO_ACCESS_IDS` (see `.env.example`).
+
 ## Markets & data sources (free, no API keys)
 
 | Market | Provider | Examples |

@@ -47,8 +47,13 @@ def main():
         sys.exit(1)
 
     hub = DataHub(allow_demo=config.allow_demo_data())
-    service = Service(hub, config.state_file())
-    bot = Bot(token, hub, service, demo_ok=config.allow_demo_data())
+    service = Service(hub, config.state_file(),
+                      pro_ids=config.pro_access_ids(),
+                      admin_id=config.admin_id())
+    bot = Bot(token, hub, service, demo_ok=config.allow_demo_data(),
+              pay_config={"provider_token": config.payment_provider_token(),
+                          "usdt_address": config.usdt_address(),
+                          "admin_id": config.admin_id()})
 
     start_health_server()
     logger.info("starting EzyAi ...")

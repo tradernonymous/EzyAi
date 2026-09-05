@@ -37,3 +37,34 @@ def state_file():
 
 def log_level():
     return env("EZYAI_LOG_LEVEL", "INFO")
+
+
+def payment_provider_token():
+    return env("PAYMENT_PROVIDER_TOKEN", "")
+
+
+def usdt_address():
+    return env("USDT_ADDRESS", "")
+
+
+def admin_id():
+    raw = env("ADMIN_TELEGRAM_ID", "")
+    try:
+        return int(raw) if raw else None
+    except ValueError:
+        return None
+
+
+def pro_access_ids():
+    """Team comp list: always-PRO chats (admin + owner monitoring).
+    Comma-separated IDs, editable anytime via env/secret (no redeploy)."""
+    out = []
+    for part in env("PRO_ACCESS_IDS", "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.append(int(part))
+        except ValueError:
+            continue
+    return tuple(out)

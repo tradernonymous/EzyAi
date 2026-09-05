@@ -296,3 +296,19 @@ COT_TARGETS = {
     "WTI": {"code": "067 ", "market": "NYME"},
     "UKOIL": {"name": "BRENT CRUDE OIL LAST DAY - NEW YORK MERCANTILE EXCHANGE"},
 }
+
+# ---- Monetization ----------------------------------------------------
+# Free: Analyze (+Quote, Dashboard preview). PRO unlocks Watch alerts,
+# Autopilot signals and deep Fundamentals (scores, DCF, COT, macro).
+TRIAL_DAYS = 3
+
+# Star amounts target the USD price at Telegram's ~$0.02/star pack rate.
+PLANS = {
+    "1mo": {"months": 1, "usd": 14.99, "stars": 750, "label": "1 month",
+            "save": None, "badge": None},
+    "6mo": {"months": 6, "usd": 44.99, "stars": 2250, "label": "6 months",
+            "save": "save 50%", "badge": "MOST POPULAR"},
+    "12mo": {"months": 12, "usd": 99.99, "stars": 5000, "label": "12 months",
+             "save": "save 44%", "badge": None},
+}
+PLAN_ORDER = ("1mo", "6mo", "12mo")

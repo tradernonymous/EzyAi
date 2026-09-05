@@ -8,7 +8,7 @@ from .autopilot import AutoPilot
 
 
 class Service:
-    def __init__(self, hub, state_path):
+    def __init__(self, hub, state_path, pro_ids=(), admin_id=None):
         self.hub = hub
         self.state_path = state_path
         self.watches = {}
@@ -16,7 +16,93 @@ class Service:
         self.daily_counters = {}
         self.last_alert = {}
         self.last_check = {}
+        self.plans = {}
+        self.pro_ids = {int(i) for i in pro_ids}
+        self.admin_id = admin_id
         self._load()
+
+    # -- plans ------------------------------------------------------------
+    def _plan_rec(self, chat_id):
+        key = str(chat_id)
+        rec = self.plans.get(key)
+        if not rec:
+            rec = {"plan": "free", "until": 0.0, "trial_used": False,
+                   "nudged": False}
+            self.plans[key] = rec
+        return rec
+
+    def get_plan(self, chat_id):
+        """Effective plan, auto-downgrading expired trial/pro to free."""
+        rec = self._plan_rec(chat_id)
+        if rec["plan"] in ("trial", "pro") and rec.get("until", 0) <= time.time():
+            rec["plan"] = "free"
+            rec["until"] = 0.0
+            rec["nudged"] = False
+            self._save()
+        return rec["plan"]
+
+    def plan_status(self, chat_id):
+        rec = self._plan_rec(chat_id)
+        return {"plan": self.get_plan(chat_id), "until": rec.get("until", 0.0),
+                "trial_used": rec.get("trial_used", False)}
+
+    def is_pro(self, chat_id):
+        try:
+            cid = int(chat_id)
+        except (TypeError, ValueError):
+            return False
+        if self.admin_id is not None and cid == self.admin_id:
+            return True
+        if cid in self.pro_ids:
+            return True
+        return self.get_plan(chat_id) in ("trial", "pro")
+
+    def is_comped(self, chat_id):
+        """True when access comes from team lists rather than a plan."""
+        try:
+            cid = int(chat_id)
+        except (TypeError, ValueError):
+            return False
+        if self.admin_id is not None and cid == self.admin_id:
+            return True
+        return cid in self.pro_ids
+
+    def start_trial(self, chat_id):
+        rec = self._plan_rec(chat_id)
+        if rec.get("trial_used"):
+            return None
+        rec["trial_used"] = True
+        rec["plan"] = "trial"
+        rec["until"] = time.time() + constants.TRIAL_DAYS * 86400
+        rec["nudged"] = False
+        self._save()
+        return rec["until"]
+
+    def activate_pro(self, chat_id, months):
+        now = time.time()
+        rec = self._plan_rec(chat_id)
+        base = max(now, rec.get("until", 0.0) if rec["plan"] == "pro" else 0.0)
+        rec["plan"] = "pro"
+        rec["until"] = base + months * 30 * 86400
+        rec["nudged"] = False
+        self._save()
+        return rec["until"]
+
+    def expiry_nudges(self):
+        """Chat ids with stored watches/autopilot whose plan is free and
+        who haven't been nudged yet (covers expiry + legacy pre-PRO)."""
+        chats = {w["chat_id"] for w in self.watches.values()}
+        chats.update(int(k) for k in self.autopilots)
+        out = []
+        for chat_id in chats:
+            rec = self._plan_rec(chat_id)
+            if self.is_pro(chat_id) or rec.get("nudged"):
+                continue
+            rec["nudged"] = True
+            out.append(int(chat_id))
+        if out:
+            self._save()
+        return out
 
     def _load(self):
         try:
@@ -29,6 +115,11 @@ class Service:
             self.autopilots[str(a["chat_id"])] = AutoPilot(
                 self.hub, a["chat_id"], a["style"], a["mode"])
         self.daily_counters = data.get("daily", {})
+        for k, v in (data.get("plans") or {}).items():
+            rec = {"plan": "free", "until": 0.0, "trial_used": False,
+                   "nudged": False}
+            rec.update(v or {})
+            self.plans[str(k)] = rec
 
     def _save(self):
         try:
@@ -40,6 +131,7 @@ class Service:
                     for a in self.autopilots.values()
                 ],
                 "daily": self.daily_counters,
+            "plans": self.plans,
             }
             tmp = self.state_path.with_suffix(".json.tmp")
             tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -90,6 +182,8 @@ class Service:
     async def tick(self, send):
         now = time.time()
         for key, watch in list(self.watches.items()):
+            if not self.is_pro(watch["chat_id"]):
+                continue  # free tier: watches stay stored, resume on PRO
             style_profile = constants.STYLE_PROFILE[watch["style"]]
             interval = style_profile["check_interval_s"]
             if now - self.last_check.get(key, 0) < interval:
@@ -112,6 +206,8 @@ class Service:
             await send(watch["chat_id"], signal)
 
         for pilot in list(self.autopilots.values()):
+            if not self.is_pro(pilot.chat_id):
+                continue
             style_profile = constants.STYLE_PROFILE[pilot.style]
             cadence = max(style_profile["check_interval_s"] * 2, 120)
             if now - pilot.last_run < cadence:

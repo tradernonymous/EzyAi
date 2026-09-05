@@ -257,7 +257,7 @@ def outlook_fx(symbol, data):
     return lines
 
 
-def fundamentals_report(kind, symbol, data, hub_mode):
+def fundamentals_report(kind, symbol, data, hub_mode, pro=True):
     e = escape
     lines = [f"\U0001f4ca <b>FUNDAMENTALS</b> \u2014 {e(symbol.upper())}"]
     if data is None:
@@ -276,7 +276,7 @@ def fundamentals_report(kind, symbol, data, hub_mode):
                 lines.append(f"{lbl}: ${v:,.0f}" if key in ("mcap", "volume_24h") else f"{lbl}: {price(v)}")
         if data.get("desc"):
             lines.append(f"\U0001f4dd {e(data['desc'])}")
-        if data.get("cscore") is not None:
+        if pro and data.get("cscore") is not None:
             lines.append("")
             lines.append(f"\U0001f3af Momentum gauge: <b>{data['cscore']:.0f}/100 "
                          f"({data.get('cgrade', '?')})</b> {meter(data['cscore'])}")
@@ -293,7 +293,8 @@ def fundamentals_report(kind, symbol, data, hub_mode):
                 lines.append(f"\U0001f6e0 {int(data['dev_commits_4w']):,} dev commits in 4 weeks")
             if data.get("supply_mined_pct") is not None:
                 lines.append(f"\u26cf {data['supply_mined_pct']:.1f}% of max supply mined")
-            lines.extend(outlook_crypto(symbol, data))
+            if pro:
+                lines.extend(outlook_crypto(symbol, data))
     elif kind == constants.KIND_STOCK:
         if data and data.get("price") is not None:
             if data.get("longName"):
@@ -310,7 +311,7 @@ def fundamentals_report(kind, symbol, data, hub_mode):
                 lines.append(f"P/E (trailing): {data['trailingPE']:.1f}")
             if data.get("stat_note"):
                 lines.append(f"\U0001f4ca {e(data['stat_note'])} (price momentum only).")
-            if data.get("fscore") is not None:
+            if pro and data.get("fscore") is not None:
                 lines.append("")
                 ent = f" \u00b7 {e(data['stat_entity'])}" if data.get("stat_entity") else ""
                 lines.append(f"\U0001f3af Fundamental score: <b>{data['fscore']:.0f}/100 "
@@ -321,10 +322,10 @@ def fundamentals_report(kind, symbol, data, hub_mode):
                                    ("momentum", "Momentum")))
                 if pl:
                     lines.append(pl)
-            if data.get("fpe"):
+            if pro and data.get("fpe"):
                 lines.append(f"FY P/E {data['fpe']:.1f} (last reported year)")
             pf = data.get("piotroski") or {}
-            if pf.get("total"):
+            if pro and pf.get("total"):
                 strength = ("strong" if pf["score"] >= 7 else
                             "average" if pf["score"] >= 4 else "weak")
                 lines.append(f"\U0001f9fe Piotroski F-score: <b>{pf['score']}/{pf['total']}</b> "
@@ -333,19 +334,20 @@ def fundamentals_report(kind, symbol, data, hub_mode):
                 failed = [rename.get(f_, f_) for f_ in (pf.get("failed") or [])[:3]]
                 if failed:
                     lines.append("Fails: " + ", ".join(e(f_) for f_ in failed))
-            if data.get("earn_quality"):
+            if pro and data.get("earn_quality"):
                 lines.append(f"\U0001f4a7 Cash conversion: {e(data['earn_quality'])}")
             for note in (data.get("fnotes") or [])[:2]:
                 lines.append(f"\u2139 {e(note)}")
             dv = data.get("dcf_verdict")
-            if dv:
+            if pro and dv:
                 dcf = data.get("dcf", {})
                 lines.append(f"\U0001f4b0 Fair value: <b>${dv['intrinsic']:,.2f}</b> "
                              f"vs ${data['price']:,.2f} \u2014 "
                              f"{dv['label']} ({dv['mos_pct']:+.0f}% margin)")
                 if dcf.get("assumptions"):
                     lines.append(f"\U0001f9ee DCF: {e(dcf['assumptions'])}")
-            lines.extend(outlook_stock(symbol, data))
+            if pro:
+                lines.extend(outlook_stock(symbol, data))
         else:
             lines.append(e(symbol) + " fundamentals feed unavailable; see links below.")
     elif kind == constants.KIND_CFD:
@@ -357,13 +359,14 @@ def fundamentals_report(kind, symbol, data, hub_mode):
                          f"3m {data.get('chg_3m', 0):+.2f}% \u00b7 1y {data.get('chg_1y', 0):+.2f}%")
             lines.append(f"Realized volatility (annualized): {data.get('vol_pct', 0):.0f}%")
             cot = data.get("cot")
-            if cot:
+            if pro and cot:
                 lines.append("")
                 arrow = "\U0001f7e2" if (cot.get("net_long") or 0) > 0 else "\U0001f534"
                 wow = f" ({cot['wow']:+,} WoW)" if cot.get("wow") is not None else ""
                 lines.append(f"{arrow} Large speculators net "
                              f"{cot['net_long']:+,} contracts{wow} \u00b7 w/e {cot['date']} (CFTC)")
-            lines.extend(outlook_cfd(symbol, data))
+            if pro:
+                lines.extend(outlook_cfd(symbol, data))
         else:
             lines.append(f"Market {e(symbol)} \u2014 fundamentals feed unavailable; see links below.")
     elif kind == constants.KIND_FOREX:
@@ -375,7 +378,7 @@ def fundamentals_report(kind, symbol, data, hub_mode):
                          f"3m {data.get('chg_3m', 0):+.2f}% \u00b7 1y {data.get('chg_1y', 0):+.2f}%")
             lines.append(f"Realized volatility (annualized): {data.get('vol_pct', 0):.0f}%")
             v = data.get("verdict")
-            if v and v.get("base"):
+            if pro and v and v.get("base"):
                 rb = constants.POLICY_RATES.get(v["base"], (None, "?"))
                 rq = constants.POLICY_RATES.get(v["quote"], (None, "?"))
                 carry = f"{v['carry_bp']:+.0f}bp" if v.get("carry_bp") is not None else "n/a"
@@ -389,7 +392,8 @@ def fundamentals_report(kind, symbol, data, hub_mode):
                 st_q = constants.POLICY_STANCE.get(v["quote"], "n/a")
                 lines.append(f"\U0001f3db Policy stance: {v['base']} {st_b} \u00b7 "
                              f"{v['quote']} {st_q}")
-            lines.extend(outlook_fx(symbol, data))
+            if pro:
+                lines.extend(outlook_fx(symbol, data))
         else:
             lines.append(f"Currency pair {e(symbol)} \u2014 derived from recent candles (Data: {hub_mode}).")
         lines.append("Watch the economic calendar for rate, inflation and labour surprises.")
@@ -488,6 +492,67 @@ def watch_list(rows):
         lines.append(f"\u2022 {w['pair']} \u2014 {w['style']}/{w['mode']} "
                       f"(last alert {('yes' if w['last_signal_ts'] else 'no')})")
     return "\n".join(lines)
+
+
+def pro_gate(feature, can_trial):
+    lines = [f"\U0001f512 <b>{feature} is a PRO feature</b>",
+             "Live alerts, autopilot signals and deep research are what PRO pays for. "
+             "Analyze stays free forever."]
+    if can_trial:
+        from .. import constants as _c
+        lines.append(f"\U0001f381 Start with a <b>{_c.TRIAL_DAYS}-day free trial</b> \u2014 "
+                     "full PRO, no payment needed.")
+    return "\n".join(lines)
+
+
+def plans_text(trial_eligible):
+    from .. import billing as _b
+    from .. import constants as _c
+    lines = ["\U0001f48e <b>EzyAi PRO</b> \u2014 alerts, autopilot, deep research.",
+             "Analyze stays free on every plan.", ""]
+    for tid in _c.PLAN_ORDER:
+        lines.append("\u2022 " + _b.tier_line(tid))
+    lines.append("")
+    if trial_eligible:
+        lines.append(f"\U0001f381 New here? Take the <b>{_c.TRIAL_DAYS}-day free trial</b> first \u2014 "
+                     "full PRO, no card.")
+    else:
+        lines.append("Trial already used on this account.")
+    lines.append("Pay with Stars \u26a1, card \U0001f4b3, or USDT \u20ae.")
+    return "\n".join(lines)
+
+
+def account_text(status, watches_n, autopilot_on, comped=False):
+    import datetime
+    import time as _t
+    plan, until = status["plan"], status.get("until", 0.0)
+    if comped:
+        state = "<b>PRO</b> \u00b7 team access"
+    elif plan == "pro":
+        date = datetime.datetime.fromtimestamp(until, datetime.timezone.utc).strftime("%d %b %Y")
+        state = f"<b>PRO</b> until {date}"
+    elif plan == "trial":
+        left = max(0, int((until - _t.time()) / 86400) + 1)
+        state = f"<b>Trial</b> \u00b7 {left} day(s) left"
+    else:
+        state = "<b>Free</b> (Analyze only)"
+    lines = ["\U0001f464 <b>Your account</b>", f"Plan: {state}",
+             f"Watching: {watches_n} pair(s) \u00b7 Autopilot: {'on' if autopilot_on else 'off'}"]
+    if plan == "free" and not comped and not status.get("trial_used"):
+        from .. import constants as _c
+        lines.append(f"\U0001f381 You still have your {_c.TRIAL_DAYS}-day free trial \u2014 see /plans.")
+    return "\n".join(lines)
+
+
+def pro_upsell_note():
+    return ("\n\U0001f512 <i>PRO unlocks scores, DCF fair value, COT positioning "
+            "and the macro verdict \u2014 /plans</i>")
+
+
+def expiry_nudge_text():
+    return ("\u23f8 Your watches and autopilot are <b>paused</b> \u2014 live alerts "
+            "are now a PRO feature.\nYour setup is saved and resumes the moment "
+            "you upgrade. See /plans (3-day free trial included).")
 
 
 def dashboard_view(watches, pilot, data_mode):

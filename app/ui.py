@@ -17,6 +17,13 @@ Callback scheme (all prefixed ``ezy:``, <=64 bytes):
   ezy:unwatch:<pair>         remove one watch
   ezy:dash                   refresh dashboard
   ezy:cancel                 abort flow
+  --- monetization ---
+  ezy:plans                  open plans screen
+  ezy:trial                  start 3-day trial
+  ezy:pay:<tier>:<method>    begin payment (stars|card|usdt)
+  ezy:paid:<tier>            user claims USDT sent
+  ezy:admin_ok:<chat>:<tier> admin approves USDT (admin only)
+  ezy:admin_no:<chat>        admin rejects USDT (admin only)
 """
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -53,6 +60,8 @@ COMMANDS = (
     ("fundamentals", "Fundamentals + news + links"),
     ("autopilot", "Random-pair auto signals"),
     ("dashboard", "Status overview + shortcuts"),
+    ("plans", "PRO plans + free trial"),
+    ("account", "Your plan and usage"),
     ("help", "How to use EzyAi"),
 )
 
@@ -111,6 +120,22 @@ def cb_unwatch(pair):
     return f"ezy:unwatch:{pair}"
 
 
+def cb_pay(tier, method):
+    return f"ezy:pay:{tier}:{method}"
+
+
+def cb_paid(tier):
+    return f"ezy:paid:{tier}"
+
+
+def cb_admin_ok(chat_id, tier):
+    return f"ezy:admin_ok:{chat_id}:{tier}"
+
+
+def cb_admin_no(chat_id):
+    return f"ezy:admin_no:{chat_id}"
+
+
 def parse_callback(data):
     """Parse callback data -> dict. Unknown -> {"a": "unknown"}."""
     parts = (data or "").split(":")
@@ -135,8 +160,23 @@ def parse_callback(data):
         return {"a": "back", "flow": parts[2], "step": parts[3]}
     if kind == "unwatch" and len(parts) == 3:
         return {"a": "unwatch", "pair": parts[2]}
+    if kind == "pay" and len(parts) == 4:
+        return {"a": "pay", "tier": parts[2], "method": parts[3]}
+    if kind == "paid" and len(parts) == 3:
+        return {"a": "paid", "tier": parts[2]}
+    if kind == "admin_ok" and len(parts) == 4:
+        try:
+            return {"a": "admin_ok", "chat": int(parts[2]), "tier": parts[3]}
+        except ValueError:
+            return {"a": "unknown"}
+    if kind == "admin_no" and len(parts) == 3:
+        try:
+            return {"a": "admin_no", "chat": int(parts[2])}
+        except ValueError:
+            return {"a": "unknown"}
     if data in ("ezy:cancel", "ezy:watch_go", "ezy:auto_go",
-                "ezy:auto_stop", "ezy:auto_stop_yes", "ezy:dash"):
+                "ezy:auto_stop", "ezy:auto_stop_yes", "ezy:dash",
+                "ezy:plans", "ezy:trial"):
         return {"a": parts[1]}
     return {"a": "unknown"}
 
@@ -225,6 +265,37 @@ def refresh_keyboard():
     return InlineKeyboardMarkup([[
         InlineKeyboardButton("\U0001f504 Refresh", callback_data="ezy:dash"),
     ]])
+
+
+def plans_keyboard(trial_eligible):
+    from . import constants as _c
+    rows = []
+    if trial_eligible:
+        rows.append([InlineKeyboardButton(
+            f"\U0001f381 {_c.TRIAL_DAYS}-day free trial",
+            callback_data="ezy:trial")])
+    for tid in _c.PLAN_ORDER:
+        p = _c.PLANS[tid]
+        label = f"\U0001f48e {p['label']} \u2014 ${p['usd']:.2f}"
+        if p["badge"]:
+            label += f" \u2b50 {p['badge']}"
+        rows.append([InlineKeyboardButton(label, callback_data=cb_pay(tid, "stars"))])
+    rows.append([InlineKeyboardButton("\U0001f3e0 Menu", callback_data=cb_menu("dash")),
+                 InlineKeyboardButton("\u2715 Cancel", callback_data="ezy:cancel")])
+    return InlineKeyboardMarkup(rows)
+
+
+def pay_methods_keyboard(tier):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("\u26a1 Pay with Stars (instant)",
+                              callback_data=cb_pay(tier, "stars"))],
+        [InlineKeyboardButton("\U0001f4b3 Pay by card (instant)",
+                              callback_data=cb_pay(tier, "card"))],
+        [InlineKeyboardButton("\u20ae Pay with USDT (manual approval)",
+                              callback_data=cb_pay(tier, "usdt"))],
+        [InlineKeyboardButton("\u2039 Plans", callback_data="ezy:plans"),
+         InlineKeyboardButton("\u2715 Cancel", callback_data="ezy:cancel")],
+    ])
 
 
 def help_keyboard():
