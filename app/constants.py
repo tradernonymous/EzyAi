@@ -5,6 +5,7 @@ SIDES = ("long", "short")
 KIND_CRYPTO = "crypto"
 KIND_FOREX = "forex"
 KIND_STOCK = "stock"
+KIND_CFD = "cfd"
 
 INTERVALS = {
     "1m": 60,
@@ -108,7 +109,38 @@ STOCK_UNIVERSE = [
     "SPY", "QQQ", "IWM", "VOO", "TQQQ", "ARKK",
 ]
 
-ALL_UNIVERSE = CRYPTO_UNIVERSE + list(FX_UNIVERSE.keys()) + STOCK_UNIVERSE
+CFD_UNIVERSE = {
+    "XAUUSD": "GC=F",
+    "XAGUSD": "SI=F",
+    "WTI": "CL=F",
+    "UKOIL": "BZ=F",
+    "NGAS": "NG=F",
+    "COPPER": "HG=F",
+    "US30": "^DJI",
+    "NAS100": "^IXIC",
+    "SPX500": "^GSPC",
+    "GER40": "^GDAXI",
+}
+
+CFD_TRADINGVIEW = {
+    "XAUUSD": "OANDA:XAUUSD",
+    "XAGUSD": "OANDA:XAGUSD",
+    "WTI": "TVC:USOIL",
+    "UKOIL": "TVC:UKOIL",
+    "NGAS": "TVC:NG",
+    "COPPER": "TVC:COPPER",
+    "US30": "TVC:DJI",
+    "NAS100": "TVC:NASDAQ",
+    "SPX500": "TVC:SPX",
+    "GER40": "TVC:DAX",
+}
+
+ALL_UNIVERSE = (
+    CRYPTO_UNIVERSE
+    + list(FX_UNIVERSE.keys())
+    + STOCK_UNIVERSE
+    + list(CFD_UNIVERSE.keys())
+)
 
 CRYPTO_REVERSE_URL = {
     "BTCUSDT": "https://www.blockchain.com/explorer/transactions/btc",

@@ -124,9 +124,9 @@ class Fundamentals:
         var = sum((x - mean) ** 2 for x in log_rets) / max(len(log_rets) - 1, 1)
         return math.sqrt(var * period) * 100.0
 
-    def forex(self, symbol):
+    def _derived(self, symbol, kind):
         from ..data.provider import YahooProvider
-        yahoo = YahooProvider(kind=constants.KIND_FOREX)
+        yahoo = YahooProvider(kind=kind)
         candles = yahoo.fetch_klines(symbol, "1d", 300)
         if not candles:
             return None
@@ -142,6 +142,12 @@ class Fundamentals:
             "vol_pct": self._realized_vol(closes),
             "source": "derived from daily candles",
         }
+
+    def forex(self, symbol):
+        return self._derived(symbol, constants.KIND_FOREX)
+
+    def cfd(self, symbol):
+        return self._derived(symbol, constants.KIND_CFD)
 
     def news(self, query, limit=3):
         items = []
@@ -188,6 +194,16 @@ class Fundamentals:
                 ("FXStreet", f"https://www.fxstreet.com/search?q={s}"),
                 ("Forex Calendar", "https://www.forexfactory.com/calendar"),
                 ("Investing.com", f"https://www.investing.com/currencies/{s.lower()}"),
+            ]
+        elif kind == constants.KIND_CFD:
+            yahoo = constants.CFD_UNIVERSE.get(s, s)
+            tv = constants.CFD_TRADINGVIEW.get(s, yahoo)
+            out += [
+                ("Yahoo Finance", f"https://finance.yahoo.com/quote/{yahoo}"),
+                ("TradingView", f"https://www.tradingview.com/chart/?symbol={tv}"),
+                ("Investing.com", f"https://www.investing.com/search/?q={s}"),
+                ("FXStreet", f"https://www.fxstreet.com/search?q={s}"),
+                ("TradingView ideas", f"https://www.tradingview.com/ideas/search/{s}/"),
             ]
         elif kind == constants.KIND_STOCK:
             out += [

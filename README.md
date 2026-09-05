@@ -28,6 +28,7 @@ intraday / swing) and *risk mode* (safe / normal / aggressive).
 | Crypto | Binance public API (multi-host fallback) | `BTCUSDT`, `ETHUSDT`, `SOLUSDT` |
 | Forex | Yahoo Finance chart API | `EURUSD`, `GBPUSD`, `USDJPY` |
 | Stocks / ETFs | Yahoo Finance chart API | `AAPL`, `TSLA`, `SPY`, `QQQ` |
+| Metals / energy / indices (CFD-style) | Yahoo Finance chart API | `XAUUSD`, `XAGUSD`, `WTI`, `US30`, `NAS100`, `SPX500` |
 
 `EZYAI_DEMO_DATA=true` enables a deterministic synthetic data fallback when a
 live feed fails (useful for offline demos/tests).

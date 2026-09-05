@@ -226,6 +226,11 @@ class Bot:
                 data = self.fund.forex(pair)
             except Exception:
                 data = None
+        elif kind == constants.KIND_CFD:
+            try:
+                data = self.fund.cfd(resolved[1])
+            except Exception:
+                data = None
         text = msg.fundamentals_report(kind, pair, data, self.hub.mode)
         links = self.fund.links(kind, pair)
         text += "\n" + msg.links_block(links)

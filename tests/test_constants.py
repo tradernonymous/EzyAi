@@ -35,5 +35,26 @@ def test_universes_nonempty():
     assert constants.CRYPTO_UNIVERSE
     assert constants.FX_UNIVERSE
     assert constants.STOCK_UNIVERSE
+    assert constants.CFD_UNIVERSE
     assert all(s.endswith("USDT") for s in constants.CRYPTO_UNIVERSE)
     assert all(len(s) == 6 for s in constants.FX_UNIVERSE)
+
+
+def test_cfd_map_targets():
+    for tag, yahoo_sym in constants.CFD_UNIVERSE.items():
+        assert tag == tag.upper()
+        assert tag not in constants.FX_UNIVERSE
+    assert "XAUUSD" in constants.CFD_UNIVERSE
+    assert "XAGUSD" in constants.CFD_UNIVERSE
+    assert "WTI" in constants.CFD_UNIVERSE
+    assert "US30" in constants.CFD_UNIVERSE
+
+
+def test_cfd_classified():
+    from app.data.provider import DataHub
+    hub = DataHub()
+    for tag in constants.CFD_UNIVERSE:
+        assert hub.classify(tag) == constants.KIND_CFD
+    kind, sym = hub.resolve("XAUUSD")
+    assert kind == constants.KIND_CFD
+    assert sym == "GC=F"

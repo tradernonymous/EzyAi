@@ -244,6 +244,7 @@ class DataHub:
         self.binance = BinanceProvider()
         self.forex = YahooProvider(kind=constants.KIND_FOREX)
         self.stock = YahooProvider(kind=constants.KIND_STOCK)
+        self.cfd = YahooProvider(kind=constants.KIND_CFD)
         self.demo = SyntheticProvider(constants.ALL_UNIVERSE)
         self.allow_demo = allow_demo
         self.mode = "live"
@@ -253,6 +254,8 @@ class DataHub:
         s = symbol.upper()
         if s in constants.CRYPTO_UNIVERSE or s.endswith(("USDT", "USDC")):
             return constants.KIND_CRYPTO
+        if s in constants.CFD_UNIVERSE:
+            return constants.KIND_CFD
         if s in constants.FX_UNIVERSE:
             return constants.KIND_FOREX
         if s in constants.STOCK_UNIVERSE:
@@ -263,6 +266,8 @@ class DataHub:
         kind = self.classify(symbol.upper())
         if kind == constants.KIND_CRYPTO:
             return kind, symbol.upper()
+        if kind == constants.KIND_CFD:
+            return kind, constants.CFD_UNIVERSE[symbol.upper()]
         if kind == constants.KIND_FOREX:
             return kind, symbol.upper()
         if kind == constants.KIND_STOCK:
@@ -295,6 +300,8 @@ class DataHub:
                     return self.binance
             except Exception:
                 pass
+        elif kind == constants.KIND_CFD:
+            return self.cfd
         elif kind == constants.KIND_FOREX:
             return self.forex
         elif kind == constants.KIND_STOCK:
@@ -359,5 +366,7 @@ class DataHub:
                 pool = list(constants.FX_UNIVERSE.keys())
             elif kind == constants.KIND_STOCK:
                 pool = constants.STOCK_UNIVERSE
+            elif kind == constants.KIND_CFD:
+                pool = list(constants.CFD_UNIVERSE.keys())
         available = [s for s in pool if s not in exclude]
         return random.choice(available or pool)

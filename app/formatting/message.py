@@ -154,6 +154,16 @@ def fundamentals_report(kind, symbol, data, hub_mode):
                 lines.append(f"P/E (trailing): {data['trailingPE']:.1f}")
         else:
             lines.append(e(symbol) + " fundamentals feed unavailable; see links below.")
+    elif kind == constants.KIND_CFD:
+        if data and data.get("price") is not None:
+            lines.append(f"Market {e(symbol)} \u00b7 Data: {e(data.get('source', 'derived'))}")
+            lines.append(f"Price: <b>{price(data['price'])}</b> \u00b7 "
+                         f"1y range {price(data.get('low_1y'))} \u2013 {price(data.get('high_1y'))}")
+            lines.append(f"Move: 1w {data.get('chg_1w', 0):+.2f}% \u00b7 1m {data.get('chg_1m', 0):+.2f}% \u00b7 "
+                         f"3m {data.get('chg_3m', 0):+.2f}% \u00b7 1y {data.get('chg_1y', 0):+.2f}%")
+            lines.append(f"Realized volatility (annualized): {data.get('vol_pct', 0):.0f}%")
+        else:
+            lines.append(f"Market {e(symbol)} \u2014 fundamentals feed unavailable; see links below.")
     elif kind == constants.KIND_FOREX:
         if data and data.get("price") is not None:
             lines.append(f"Pair {e(symbol)} \u00b7 Data: {e(data.get('source','derived'))}")
@@ -207,7 +217,7 @@ def help_text():
     return (
         "<b>EzyAi commands</b>\n\n"
         "/analyze \u2014 on-demand market analysis with entry/exit, level-based flow\n"
-        "/watch PAIR STYLE MODE \u2014 live alerts for a pair (crypto, forex, stock)\n"
+        "/watch PAIR STYLE MODE \u2014 live alerts for a pair (crypto, forex, stock, cfd)\n"
         "    STYLE: scalping | intraday | swing\n"
         "    MODE:  safe | normal | aggressive\n"
         "/watches \u2014 list your active watches\n"
@@ -217,6 +227,6 @@ def help_text():
         "/stopautopilot \u2014 stop random signals\n"
         "/quote PAIR \u2014 quick live price\n"
         "/help \u2014 this message\n\n"
-        "Examples: crypto BTCUSDT \u00b7 forex EURUSD \u00b7 stock AAPL\n"
+        "Examples: crypto BTCUSDT \u00b7 forex EURUSD \u00b7 stock AAPL \u00b7 cfd XAUUSD\n"
         "Modes affect frequency and risk: safe (fewer, tighter), aggressive (more, wider)."
     )
