@@ -99,9 +99,26 @@ _DEFAULT_GATES = {
     "conf_gate": 62.0,
 }
 SIGNAL_GATES = {
+    # scalping keeps defaults: tuning gains were marginal (lift +0.4pp).
     "scalping": dict(_DEFAULT_GATES),
-    "intraday": dict(_DEFAULT_GATES),
-    "swing": dict(_DEFAULT_GATES),
+    # intraday tuned 2026-09-05 (n=2261, PF 1.16->1.22, DD 52.8->38.6R).
+    "intraday": {
+        "rsi_long": (40.0, 65.0),
+        "rsi_short": (28.0, 52.0),
+        "adx_min": 32.0,
+        "stoch_cut": 50.0,
+        "macd_atr_min": 0.0,
+        "conf_gate": 66.0,
+    },
+    # swing tuned 2026-09-05 (n=2501, PF 1.36->1.42, lift +1.8->+3.8pp).
+    "swing": {
+        "rsi_long": (45.0, 68.0),
+        "rsi_short": (30.0, 55.0),
+        "adx_min": 28.0,
+        "stoch_cut": 45.0,
+        "macd_atr_min": 0.0,
+        "conf_gate": 70.0,
+    },
 }
 
 CRYPTO_UNIVERSE = [

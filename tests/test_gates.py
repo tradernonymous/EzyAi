@@ -16,14 +16,26 @@ def test_gates_cover_all_styles():
 
 
 def test_gate_defaults_match_legacy_thresholds():
-    for style in constants.STYLES:
-        g = constants.SIGNAL_GATES[style]
-        assert tuple(g["rsi_long"]) == (45.0, 68.0)
-        assert tuple(g["rsi_short"]) == (30.0, 55.0)
-        assert g["adx_min"] == 25.0
-        assert g["stoch_cut"] == 50.0
-        assert g["macd_atr_min"] == 0.0
-        assert g["conf_gate"] == float(constants.CONFIDENCE_GATE)
+    g = constants.SIGNAL_GATES["scalping"]
+    assert tuple(g["rsi_long"]) == (45.0, 68.0)
+    assert tuple(g["rsi_short"]) == (30.0, 55.0)
+    assert g["adx_min"] == 25.0
+    assert g["stoch_cut"] == 50.0
+    assert g["macd_atr_min"] == 0.0
+    assert g["conf_gate"] == float(constants.CONFIDENCE_GATE)
+
+
+def test_approved_tuned_gates():
+    # Approved 2026-09-05 from scripts/tune.py evidence (see tune_results).
+    intra = constants.SIGNAL_GATES["intraday"]
+    assert tuple(intra["rsi_long"]) == (40.0, 65.0)
+    assert tuple(intra["rsi_short"]) == (28.0, 52.0)
+    assert intra["adx_min"] == 32.0
+    assert intra["conf_gate"] == 66.0
+    swing = constants.SIGNAL_GATES["swing"]
+    assert swing["adx_min"] == 28.0
+    assert swing["stoch_cut"] == 45.0
+    assert swing["conf_gate"] == 70.0
 
 
 def test_scalar_direction_matches_legacy_logic():
