@@ -39,8 +39,16 @@ def log_level():
     return env("EZYAI_LOG_LEVEL", "INFO")
 
 
-def payment_provider_token():
-    return env("PAYMENT_PROVIDER_TOKEN", "")
+def stripe_api_key():
+    return env("STRIPE_API_KEY", "")
+
+
+def stripe_webhook_secret():
+    return env("STRIPE_WEBHOOK_SECRET", "")
+
+
+def bot_username():
+    return env("BOT_USERNAME", "ezytradeai_bot")
 
 
 def usdt_address():

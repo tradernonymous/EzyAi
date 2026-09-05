@@ -493,11 +493,11 @@ class Bot:
                 await self._reply(update, text)
 
     async def _pay_card(self, update, ctx, tier, query=None):
-        from telegram import LabeledPrice
-        token = (self.pay or {}).get("provider_token") or ""
         plan = billing.tier(tier)
+        key = (self.pay or {}).get("stripe_key") or ""
+        username = (self.pay or {}).get("bot_username") or "ezytradeai_bot"
         chat_id = update.effective_chat.id
-        if not token:
+        if not key:
             text = ("Card payments are being wired up \u2014 use Stars "
                     "for instant PRO, or USDT below.")
             if query is not None:
@@ -506,14 +506,26 @@ class Bot:
                 await self._reply(update, text)
             return
         try:
-            await ctx.bot.send_invoice(
-                chat_id, f"EzyAi PRO \u2014 {plan['label']}",
-                "Live alerts, autopilot signals, deep research.",
-                billing.encode_payload(tier, "card", chat_id),
-                provider_token=token, currency="USD",
-                prices=[LabeledPrice(plan["label"], int(plan["usd"] * 100))])
+            import stripe  # lazy: only card payers touch it
+            stripe.api_key = key
+            session = stripe.checkout.Session.create(**billing.stripe_session_params(
+                tier, chat_id,
+                success_url=f"https://t.me/{username}?start=paid",
+                cancel_url=f"https://t.me/{username}?start=cancelled"))
+            url = session.get("url") if isinstance(session, dict) else session.url
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton(f"\U0001f4b3 Pay ${plan['usd']:.2f} now", url=url)],
+                [InlineKeyboardButton("\u2715 Cancel", callback_data="ezy:cancel")],
+            ])
+            text = (f"\U0001f4b3 <b>EzyAi PRO \u2014 {plan['label']}</b> "
+                    f"${plan['usd']:.2f}\nTap below to check out securely with Stripe. "
+                    "PRO activates automatically.")
+            if query is not None:
+                await self._edit_or_send(query, text, kb)
+            else:
+                await self._reply(update, text, reply_markup=kb)
         except Exception as exc:
-            logger.warning("card invoice failed: %s", exc)
+            logger.warning("stripe session failed: %s", exc)
             text = ("Card checkout hiccup \u2014 please try again or use Stars/USDT.")
             if query is not None:
                 await self._edit_or_send(query, text)

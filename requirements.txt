@@ -2,3 +2,5 @@ python-telegram-bot[job-queue]>=21.6
 requests>=2.32
 # Public-only crypto fallback behind Binance (no API key; lazily imported).
 ccxt>=4.5
+# Native Stripe card checkout (Checkout Sessions + webhooks; lazily imported).
+stripe>=15.0

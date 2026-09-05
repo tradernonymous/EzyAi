@@ -203,3 +203,54 @@ def test_config_pro_ids(monkeypatch):
     assert config.pro_access_ids() == (1, 2, 3)
     monkeypatch.delenv("PRO_ACCESS_IDS")
     assert config.pro_access_ids() == ()
+    monkeypatch.setenv("STRIPE_API_KEY", "sk_test_x")
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_x")
+    assert config.stripe_api_key() == "sk_test_x"
+    assert config.stripe_webhook_secret() == "whsec_x"
+    assert config.bot_username() == "ezytradeai_bot"
+
+
+def test_stripe_session_params_dynamic():
+    p = billing.stripe_session_params("6mo", 42, "https://t.me/x?start=paid",
+                                      "https://t.me/x?start=cancelled")
+    assert p["mode"] == "payment"
+    item = p["line_items"][0]
+    assert item["quantity"] == 1
+    assert "price" not in item  # no preset Price ID: dynamic price_data
+    pd = item["price_data"]
+    assert pd["currency"] == "usd" and pd["unit_amount"] == 4499
+    assert "6 months" in pd["product_data"]["name"]
+    assert billing.decode_payload(p["metadata"]["order"]) == {
+        "tier": "6mo", "method": "card", "chat_id": 42}
+    assert billing.stripe_session_params(
+        "1mo", 1, "s", "c")["line_items"][0]["price_data"]["unit_amount"] == 1499
+    assert billing.stripe_session_params(
+        "12mo", 1, "s", "c")["line_items"][0]["price_data"]["unit_amount"] == 9999
+
+
+class _FakeService:
+    def __init__(self):
+        self.calls = []
+
+    def activate_pro(self, chat_id, months):
+        self.calls.append((chat_id, months))
+        return 999.0
+
+
+def test_fulfill_checkout_session():
+    svc = _FakeService()
+    sess = {"payment_status": "paid",
+            "metadata": {"order": billing.encode_payload("12mo", "card", 77)}}
+    assert billing.fulfill_checkout_session(sess, svc) == (77, "12mo", 999.0)
+    assert svc.calls == [(77, 12)]
+    assert billing.fulfill_checkout_session(
+        {"payment_status": "unpaid", "metadata": {}}, svc) is None
+    assert billing.fulfill_checkout_session(
+        {"payment_status": "paid", "metadata": {"order": "junk"}}, svc) is None
+    assert billing.fulfill_checkout_session({"payment_status": "paid"}, svc) is None
+    assert svc.calls == [(77, 12)]  # no activation on rejects
+
+
+def test_verify_stripe_event_rejects_garbage():
+    assert billing.verify_stripe_event(b"{}", "bad", "whsec_x") is None
+    assert billing.verify_stripe_event(b"", "", "") is None

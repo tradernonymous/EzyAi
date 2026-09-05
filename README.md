@@ -36,14 +36,18 @@ every result.
   (scores, DCF fair value, COT positioning, macro verdict + outlook).
 - **Plans**: 1 month $14.99 · **6 months $44.99 (MOST POPULAR, save 50%)** ·
   12 months $99.99 (save 44%). 3-day free trial, once per user.
-- **Payments**: Telegram Stars + card auto-approve via invoices;
-  USDT manual (TRC-20) with admin approve/deny buttons.
+- **Payments**: Telegram Stars auto-approve via invoices; card via native
+  Stripe Checkout (dynamic prices, no preset Price IDs) with webhook
+  auto-activation at `/webhook/stripe`; USDT manual (TRC-20) with admin
+  approve/deny buttons.
 - **Team access**: `PRO_ACCESS_IDS` (comma-separated chat ids, always PRO,
   editable via secret); `ADMIN_TELEGRAM_ID` approves USDT claims.
   The two lists are independent.
 - Expiry auto-downgrades; watches stay stored and resume on PRO.
-  Env: `PAYMENT_PROVIDER_TOKEN`, `USDT_ADDRESS`, `ADMIN_TELEGRAM_ID`,
-  `PRO_ACCESS_IDS` (see `.env.example`).
+  Env: `STRIPE_API_KEY`, `STRIPE_WEBHOOK_SECRET`, `BOT_USERNAME`,
+  `USDT_ADDRESS`, `ADMIN_TELEGRAM_ID`, `PRO_ACCESS_IDS`
+  (see `.env.example`). Register `https://<app>.fly.dev/webhook/stripe`
+  as the Stripe webhook endpoint (event: `checkout.session.completed`).
 
 ## Markets & data sources (free, no API keys)
 
