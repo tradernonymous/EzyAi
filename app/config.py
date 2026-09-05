@@ -1,0 +1,39 @@
+import os
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def load_dotenv(path=None):
+    path = Path(path or PROJECT_ROOT / ".env")
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip("\"'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+def env(key, default=None):
+    return os.environ.get(key, default)
+
+
+def telegram_token():
+    return env("TELEGRAM_BOT_TOKEN", "")
+
+
+def allow_demo_data():
+    return env("EZYAI_DEMO_DATA", "false").lower() in ("1", "true", "yes", "on")
+
+
+def state_file():
+    return Path(env("EZYAI_STATE_FILE", str(PROJECT_ROOT / "state.json")))
+
+
+def log_level():
+    return env("EZYAI_LOG_LEVEL", "INFO")
