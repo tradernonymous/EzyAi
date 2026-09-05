@@ -1,4 +1,5 @@
 import html
+import logging
 import re
 import time
 import requests
@@ -6,6 +7,8 @@ import requests
 from .. import constants
 from . import edgar as edgar_mod
 from . import scoring
+
+logger = logging.getLogger(__name__)
 
 
 class Fundamentals:
@@ -72,6 +75,7 @@ class Fundamentals:
             detail = self._get(f"{self.CG}/coins/{cid}")
             meta = detail.get("market_data", {})
             links = detail.get("links", {})
+            dev = detail.get("developer_data", {}) or {}
             mcap = price.get("usd_market_cap")
             vol24 = price.get("usd_24h_vol")
             out = {
@@ -101,6 +105,15 @@ class Fundamentals:
                 "whitepaper": (links.get("whitepaper") or None),
             }
             out["volume_mcap"] = (vol24 / mcap) if (vol24 and mcap) else None
+            out["sent_up"] = detail.get("sentiment_votes_up_percentage")
+            out["sent_down"] = detail.get("sentiment_votes_down_percentage")
+            out["dev_commits_4w"] = dev.get("commit_count_4_weeks")
+            try:
+                circ = float(meta.get("circulating_supply") or 0)
+                maxs = float(meta.get("max_supply") or 0)
+                out["supply_mined_pct"] = (circ / maxs * 100) if maxs > 0 else None
+            except (TypeError, ValueError):
+                out["supply_mined_pct"] = None
             gauge = scoring.crypto_score(
                 out["chg_7d"], out["chg_30d"], out["chg_1y"], out["ath_pct"],
                 out["volume_mcap"], out["rank"])
@@ -108,7 +121,8 @@ class Fundamentals:
             out["cgrade"] = gauge["grade"]
             out["cpillars"] = gauge["pillars"]
             return out
-        except Exception:
+        except Exception as exc:
+            logger.warning("crypto fund failed %s: %s", pair, type(exc).__name__)
             return None
 
     def stock(self, symbol):
@@ -157,10 +171,15 @@ class Fundamentals:
             return None
 
         def fetch():
-            r = self.session.get(
-                edgar_mod.EDGAR_FACTS.format(cik=cik), timeout=self.timeout)
-            r.raise_for_status()
-            return r.json()
+            try:
+                r = self.session.get(
+                    edgar_mod.EDGAR_FACTS.format(cik=cik), timeout=self.timeout)
+                r.raise_for_status()
+                return r.json()
+            except Exception as exc:
+                logger.warning("EDGAR fetch failed %s: %s %s", ticker,
+                               type(exc).__name__, str(exc)[:120])
+                raise
 
         return self._cached("edgar:" + ticker.upper(), 86400, fetch)
 
@@ -182,6 +201,10 @@ class Fundamentals:
                 m.get("fcf"), m.get("ocf_cagr_3y"), m.get("shares"),
                 m.get("net_debt") or 0.0)
             verdict = scoring.dcf_verdict(dcf, price)
+            try:
+                fscore = scoring.piotroski(m.get("series", {}))
+            except Exception:
+                fscore = None
             return {"stat_entity": m.get("entity"), "stat_fy": m.get("fy"),
                     "stat_metrics": {k: m.get(k) for k in (
                         "revenue", "net_income", "equity", "fcf", "shares",
@@ -189,7 +212,10 @@ class Fundamentals:
                         "net_margin", "roe", "de_ratio", "current_ratio")},
                     "fscore": score["score"], "fgrade": score["grade"],
                     "fpillars": score["pillars"], "fpe": score["pe"],
-                    "fnotes": score["notes"], "dcf": dcf, "dcf_verdict": verdict}
+                    "fnotes": score["notes"], "dcf": dcf, "dcf_verdict": verdict,
+                    "piotroski": fscore,
+                    "earn_quality": scoring.earnings_quality(
+                        m.get("fcf"), m.get("net_income"))}
         except Exception:
             return {}
 
@@ -257,7 +283,12 @@ class Fundamentals:
                                "noncomm_positions_short_all,"
                                "open_interest_all",
                     "$order": "report_date_as_yyyy_mm_dd DESC",
-                }, timeout=self.timeout).json()
+                }, timeout=self.timeout)
+            try:
+                rows = rows.json()
+            except Exception as exc:
+                logger.warning("COT fetch failed %s: %s", pair, type(exc).__name__)
+                raise
             by_market = {}
             for r in rows:
                 try:
@@ -309,8 +340,11 @@ class Fundamentals:
             ).text
             for m in re.finditer(r"<item>(.*?)</item>", text, re.S):
                 block = m.group(1)
-                title = re.sub(r"<[^>]+>", "", block)
+                title_m = re.search(r"<title>(.*?)</title>", block, re.S)
+                raw_title = title_m.group(1) if title_m else block
+                title = re.sub(r"<[^>]+>", "", raw_title)
                 title = title.replace("&amp;", "&").replace("&#39;", "'")
+                title = title.replace("&#x27;", "'").replace("&quot;", '"')
                 link_m = re.search(r"<link>(.*?)</link>", block)
                 if not link_m:
                     continue

@@ -24,6 +24,7 @@ TAGS = {
     "shares": ["CommonStockSharesOutstanding"],
     "eps": ["EarningsPerShareDiluted"],
     "op_income": ["OperatingIncomeLoss"],
+    "gross_profit": ["GrossProfit"],
     "cash": ["CashAndCashEquivalentsAtCarryingValue"],
 }
 
@@ -93,6 +94,11 @@ def statement_metrics(facts):
             tag, s = pick_series(facts, tags, "USD")
         series[key] = s
         out[key + "_tag"] = tag
+    # combined debt series (long-term + current) for leverage checks
+    lt, cur = series.get("debt_lt", {}), series.get("debt_current", {})
+    debt = {fy: lt.get(fy, 0.0) + cur.get(fy, 0.0)
+            for fy in set(lt) | set(cur)}
+    series["debt"] = dict(sorted(debt.items()))
     out["series"] = series
 
     def last(key, years_back=0):

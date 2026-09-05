@@ -112,6 +112,119 @@ def dcf_verdict(dcf, price):
     return {"intrinsic": iv, "mos_pct": mos, "label": label}
 
 
+def piotroski(series):
+    """Piotroski F-score from annual statement series.
+
+    series: {key: {fy: value}} with keys revenue, net_income, assets,
+    ocf, debt, equity, assets_current, liab_current, shares,
+    gross_profit. Each of the 9 binary criteria needs current + prior
+    FY; missing inputs abstain and shrink the denominator, reported
+    as "score/total".
+    """
+    def last2(key):
+        s = series.get(key, {})
+        fys = sorted(s)
+        if len(fys) < 2:
+            return None, None
+        return s[fys[-1]], s[fys[-2]]
+
+    # align every criterion on FYs shared by ALL inputs (taxonomy drift
+    # can leave different tags covering different year ranges)
+    common = None
+    for key in ("net_income", "assets", "ocf", "revenue", "debt", "equity",
+                "assets_current", "liab_current", "shares", "gross_profit"):
+        fys = set(series.get(key, {}))
+        common = fys if common is None else (common & fys)
+    aligned = {}
+    if common and len(common) >= 2:
+        top = sorted(common)[-2:]
+        for key in ("net_income", "assets", "ocf", "revenue", "debt",
+                    "equity", "assets_current", "liab_current", "shares",
+                    "gross_profit"):
+            s = series.get(key, {})
+            aligned[key] = (s[top[1]], s[top[0]])
+    else:
+        aligned = {key: last2(key) for key in (
+            "net_income", "assets", "ocf", "revenue", "debt", "equity",
+            "assets_current", "liab_current", "shares", "gross_profit")}
+
+    checks = []
+    ni, ni_p = aligned["net_income"]
+    assets, assets_p = aligned["assets"]
+    ocf, _ = aligned["ocf"]
+    rev, rev_p = aligned["revenue"]
+    debt, debt_p = aligned["debt"]
+    eq, eq_p = aligned["equity"]
+    ca, ca_p = aligned["assets_current"]
+    cl, cl_p = aligned["liab_current"]
+    sh, sh_p = aligned["shares"]
+    gp, gp_p = aligned["gross_profit"]
+
+    def roa(ni_v, a_v):
+        return (ni_v / a_v) if (ni_v is not None and a_v) else None
+
+    r, r_p = roa(ni, assets), roa(ni_p, assets_p)
+    if r is not None:
+        checks.append(("ROA positive", r > 0))
+    if ocf is not None:
+        checks.append(("Cash flow positive", ocf > 0))
+    if r is not None and r_p is not None:
+        checks.append(("ROA improving", r > r_p))
+    if ocf is not None and ni is not None:
+        checks.append(("Cash-backed earnings", ocf > ni))
+
+    def lev(debt_v, eq_v):
+        tot = (debt_v or 0.0) + (eq_v or 0.0)
+        return ((debt_v or 0.0) / tot) if tot > 0 else None
+
+    l, l_p = lev(debt, eq), lev(debt_p, eq_p)
+    if l is not None and l_p is not None:
+        checks.append(("Leverage falling", l < l_p))
+
+    def cr(ca_v, cl_v):
+        return (ca_v / cl_v) if (ca_v is not None and cl_v) else None
+
+    c, c_p = cr(ca, cl), cr(ca_p, cl_p)
+    if c is not None and c_p is not None:
+        checks.append(("Liquidity improving", c > c_p))
+    if sh is not None and sh_p is not None and sh_p > 0:
+        checks.append(("No dilution", sh <= sh_p))
+
+    def gm(gp_v, rev_v):
+        return (gp_v / rev_v) if (gp_v is not None and rev_v) else None
+
+    g, g_p = gm(gp, rev), gm(gp_p, rev_p)
+    if g is not None and g_p is not None:
+        checks.append(("Margins expanding", g > g_p))
+
+    def ato(rev_v, a_v):
+        return (rev_v / a_v) if (rev_v is not None and a_v) else None
+
+    a, a_p = ato(rev, assets), ato(rev_p, assets_p)
+    if a is not None and a_p is not None:
+        checks.append(("Turnover improving", a > a_p))
+
+    score = sum(1 for _, ok in checks if ok)
+    return {"score": score, "total": len(checks),
+            "passed": [name for name, ok in checks if ok],
+            "failed": [name for name, ok in checks if not ok]}
+
+
+def earnings_quality(fcf, net_income):
+    """FCF-vs-profit cash conversion verdict. Worded to never collide
+    with the Piotroski 'Cash-backed earnings' (OCF-vs-NI) criterion."""
+    if fcf is None or net_income is None:
+        return None
+    if net_income <= 0:
+        return ("loss-making: cash burn" if fcf < 0
+                else "loss-making on paper, cash-positive")
+    if fcf < 0:
+        return "negative cash conversion"
+    if fcf / net_income >= 0.8:
+        return "strong cash conversion"
+    return "partial cash conversion"
+
+
 def crypto_score(chg_7d=None, chg_30d=None, chg_1y=None,
                  ath_pct=None, volume_mcap=None, rank=None):
     """Momentum/liquidity gauge (no statements in crypto). 0-100."""

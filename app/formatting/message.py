@@ -109,6 +109,9 @@ def quote_report(pair, tick):
     )
 
 
+DIV = "\u2500" * 20
+
+
 def meter(value, maximum=100.0, width=8):
     if value is None or maximum <= 0:
         return "\u25b1" * width
@@ -154,16 +157,12 @@ def fundamentals_report(kind, symbol, data, hub_mode):
                 lines.append(pl)
             if data.get("ath_pct") is not None and data["ath_pct"] < 0:
                 lines.append(f"{abs(data['ath_pct']):.0f}% below all-time high")
-        links = []
-        if data.get("website"):
-            links.append(f"\u2022 Website: {e(data['website'])}")
-        if data.get("explorer"):
-            links.append(f"\u2022 Explorer: {e(data['explorer'])}")
-        if data.get("whitepaper"):
-            links.append(f"\u2022 Whitepaper: {e(data['whitepaper'])}")
-        if links:
-            lines.append("<b>Official links</b>")
-            lines.extend(links)
+            if data.get("sent_up") is not None:
+                lines.append(f"\U0001f465 Community vote: {data['sent_up']:.0f}% bullish")
+            if data.get("dev_commits_4w"):
+                lines.append(f"\U0001f6e0 {int(data['dev_commits_4w']):,} dev commits in 4 weeks")
+            if data.get("supply_mined_pct") is not None:
+                lines.append(f"\u26cf {data['supply_mined_pct']:.1f}% of max supply mined")
     elif kind == constants.KIND_STOCK:
         if data and data.get("price") is not None:
             if data.get("longName"):
@@ -190,10 +189,20 @@ def fundamentals_report(kind, symbol, data, hub_mode):
                                    ("momentum", "Momentum")))
                 if pl:
                     lines.append(pl)
-                if data.get("fpe"):
-                    lines.append(f"FY P/E {data['fpe']:.1f} (last reported year)")
-                for note in (data.get("fnotes") or [])[:2]:
-                    lines.append(f"\u2139 {e(note)}")
+            if data.get("fpe"):
+                lines.append(f"FY P/E {data['fpe']:.1f} (last reported year)")
+            pf = data.get("piotroski") or {}
+            if pf.get("total"):
+                strength = ("strong" if pf["score"] >= 7 else
+                            "average" if pf["score"] >= 4 else "weak")
+                lines.append(f"\U0001f9fe Piotroski F-score: <b>{pf['score']}/{pf['total']}</b> "
+                             f"({strength} financial trend)")
+                if pf.get("failed"):
+                    lines.append("Fails: " + ", ".join(e(f_) for f_ in pf["failed"][:3]))
+            if data.get("earn_quality"):
+                lines.append(f"\U0001f4a7 Cash conversion: {e(data['earn_quality'])}")
+            for note in (data.get("fnotes") or [])[:2]:
+                lines.append(f"\u2139 {e(note)}")
             dv = data.get("dcf_verdict")
             if dv:
                 dcf = data.get("dcf", {})
@@ -214,7 +223,7 @@ def fundamentals_report(kind, symbol, data, hub_mode):
             lines.append(f"Realized volatility (annualized): {data.get('vol_pct', 0):.0f}%")
             cot = data.get("cot")
             if cot:
-                arrow = "\U0001f7e2" if (cot.get("wow") or 0) > 0 else "\U0001f534"
+                arrow = "\U0001f7e2" if (cot.get("net_long") or 0) > 0 else "\U0001f534"
                 wow = f" ({cot['wow']:+,} WoW)" if cot.get("wow") is not None else ""
                 lines.append(f"{arrow} Large speculators net "
                              f"{cot['net_long']:+,} contracts{wow} \u00b7 w/e {cot['date']} (CFTC)")
@@ -239,11 +248,13 @@ def fundamentals_report(kind, symbol, data, hub_mode):
                 trend = ("trends agree" if v["agree"] else "trends conflict")
                 lines.append(f"\U0001f4c8 {v['direction'].capitalize()} \u00b7 {trend} "
                              f"\u00b7 risk: {v['risk']}")
+                st_b = constants.POLICY_STANCE.get(v["base"], "n/a")
+                st_q = constants.POLICY_STANCE.get(v["quote"], "n/a")
+                lines.append(f"\U0001f3db Policy stance: {v['base']} {st_b} \u00b7 "
+                             f"{v['quote']} {st_q}")
         else:
             lines.append(f"Currency pair {e(symbol)} \u2014 derived from recent candles (Data: {hub_mode}).")
         lines.append("Watch the economic calendar for rate, inflation and labour surprises.")
-    lines.append("")
-    lines.append("<b>Links</b>")
     return "\n".join(lines)
 
 
@@ -251,6 +262,64 @@ def links_block(links):
     lines = []
     for label, url in links:
         lines.append(f"\u2022 <a href=\"{escape(url)}\">{escape(label)}</a>")
+    return "\n".join(lines)
+
+
+def _linked(url, label):
+    return f"<a href=\"{escape(url)}\">{escape(label)}</a>"
+
+
+def related_reading(kind, symbol, links, news):
+    """Links rewoven as one-line stories + hyperlinked headlines."""
+    by_label = {label: url for label, url in links}
+    s = symbol.upper()
+    asset = s
+    if kind == constants.KIND_CRYPTO:
+        asset = constants.base_asset(s)
+    lines = ["", DIV, "\U0001f4d6 <b>Go deeper</b>"]
+    if kind == constants.KIND_CRYPTO:
+        if "CoinGecko" in by_label:
+            lines.append(f"Track {asset} live on {_linked(by_label['CoinGecko'], 'CoinGecko')} "
+                         f"and {_linked(by_label.get('CoinMarketCap', by_label['CoinGecko']), 'CoinMarketCap')}.")
+        if "Binance" in by_label:
+            lines.append(f"Trade it on {_linked(by_label['Binance'], 'Binance')} or chart every "
+                         f"tick on {_linked(by_label.get('TradingView', by_label['Binance']), 'TradingView')}.")
+        if "Block Explorer" in by_label:
+            lines.append(f"Verify supply and flows yourself on the {_linked(by_label['Block Explorer'], 'block explorer')}.")
+    elif kind == constants.KIND_STOCK:
+        if "Yahoo Finance" in by_label:
+            lines.append(f"Read the full quote and company profile on {_linked(by_label['Yahoo Finance'], 'Yahoo Finance')}.")
+        if "TradingView" in by_label:
+            lines.append(f"Chart {s} against the market on {_linked(by_label['TradingView'], 'TradingView')}.")
+        extra = [l for l in ("StockAnalysis", "Macrotrends") if l in by_label]
+        if extra:
+            lines.append("For filings-grade history: " + " and ".join(
+                _linked(by_label[l], l) for l in extra) + ".")
+    elif kind == constants.KIND_FOREX:
+        if "Yahoo Finance" in by_label:
+            lines.append(f"Follow {s} tick-by-tick on {_linked(by_label['Yahoo Finance'], 'Yahoo Finance')}.")
+        if "Forex Calendar" in by_label:
+            lines.append(f"Rates move on surprises \u2014 watch {_linked(by_label['Forex Calendar'], 'the economic calendar')}.")
+        chatter = [l for l in ("FXStreet", "Investing.com") if l in by_label]
+        if chatter:
+            lines.append("Desk chatter: " + " and ".join(
+                _linked(by_label[l], l) for l in chatter) + ".")
+    elif kind == constants.KIND_CFD:
+        if "TradingView" in by_label:
+            lines.append(f"Chart {s} with futures overlays on {_linked(by_label['TradingView'], 'TradingView')}.")
+        rest = [l for l in ("Investing.com", "FXStreet", "TradingView ideas", "Yahoo Finance")
+                if l in by_label]
+        if rest:
+            lines.append("Wider reading: " + " and ".join(
+                _linked(by_label[l], l) for l in rest) + ".")
+    if news:
+        lines.append("")
+        lines.append("\U0001f4f0 <b>Related headlines</b>")
+        for n in news[:4]:
+            lines.append(f"\u2022 {_linked(n['url'], n['title'])}")
+    lines.append("")
+    lines.append("\u26a0\ufe0f Educational research only \u2014 not financial advice. "
+                 "Verify prices with your broker before acting.")
     return "\n".join(lines)
 
 

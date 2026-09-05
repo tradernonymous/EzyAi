@@ -281,6 +281,15 @@ POLICY_RATES = {
     "CAD": (2.25, "BoC"), "NZD": (2.75, "RBNZ"),
 }
 
+# Near-term policy stance per currency (dated; tilts the narrative only).
+POLICY_STANCE_ASOF = "2026-09-05"
+POLICY_STANCE = {
+    "USD": "hike likely 16 Sep", "EUR": "hike likely 10 Sep",
+    "GBP": "on hold", "JPY": "hike likely (to 1.25%)",
+    "AUD": "on hold 4.35%", "CHF": "on hold 0%",
+    "CAD": "on hold 2.25%", "NZD": "fresh hike to 2.75%",
+}
+
 # CFTC legacy-futures targets for COT positioning (free Socrata API).
 COT_TARGETS = {
     "XAUUSD": {"code": "088 ", "market": "CMX "},

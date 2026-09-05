@@ -221,7 +221,11 @@ def test_report_blocks_present():
     t2 = msg.fundamentals_report("forex", "EURUSD", fx, "live")
     assert "Carry" in t2 and "risk: low" in t2
     assert msg.meter(50) == "\u25b0" * 4 + "\u25b1" * 4
-    assert "Links" in msg.fundamentals_report("stock", "X", None, "live")
+    bare = msg.fundamentals_report("stock", "X", None, "live")
+    assert "<b>Links</b>" not in bare  # links now live in related_reading
+    tail = msg.related_reading("stock", "X", [], [])
+    assert "\u2500" in tail  # divider always present
+    assert "not financial advice" in tail
 
 
 def test_policy_rates_sane():
@@ -229,4 +233,127 @@ def test_policy_rates_sane():
     for ccy in ("USD", "EUR", "GBP", "JPY", "AUD", "CHF", "CAD", "NZD"):
         rate, bank = constants.POLICY_RATES[ccy]
         assert -1.0 <= rate <= 10.0 and bank
+        assert ccy in constants.POLICY_STANCE
     assert "AAPL" in constants.SEC_CIK and "SPY" not in constants.SEC_CIK
+
+
+def _p_series():
+    def yrs(vals):
+        return {2023 + i: v for i, v in enumerate(vals)}
+    return {
+        "net_income": yrs([8.0, 12.0]),
+        "assets": yrs([100.0, 110.0]),
+        "ocf": yrs([15.0, 20.0]),
+        "revenue": yrs([90.0, 115.0]),
+        "debt": yrs([20.0, 18.0]),
+        "equity": yrs([50.0, 55.0]),
+        "assets_current": yrs([30.0, 35.0]),
+        "liab_current": yrs([15.0, 14.0]),
+        "shares": yrs([10.0, 10.0]),
+        "gross_profit": yrs([30.0, 45.0]),
+    }
+
+
+def test_piotroski_all_pass():
+    p = scoring.piotroski(_p_series())
+    assert p["score"] == 9 and p["total"] == 9 and not p["failed"]
+
+
+def test_piotroski_abstains_when_missing():
+    p = scoring.piotroski({"net_income": {2024: 5.0}})
+    assert p["total"] <= 2
+    assert scoring.piotroski({}) == {"score": 0, "total": 0,
+                                     "passed": [], "failed": []}
+
+
+def test_piotroski_aligns_fiscal_years():
+    # ocf covering different years than income must not mix FYs
+    s = _p_series()
+    s["ocf"] = {2022: 15.0, 2023: 20.0}  # lags income (2023, 2024)
+    p = scoring.piotroski(s)
+    assert p["total"] == 9  # aligned on 2022+2023, nothing abstains wrongly
+    assert "Cash-backed earnings" in p["passed"]  # 20 > 12 on aligned FYs
+
+
+def test_earnings_quality_labels():
+    assert scoring.earnings_quality(10.0, 10.0) == "strong cash conversion"
+    assert scoring.earnings_quality(4.0, 10.0) == "partial cash conversion"
+    assert scoring.earnings_quality(-2.0, 10.0) == "negative cash conversion"
+    assert scoring.earnings_quality(-2.0, -5.0) == "loss-making: cash burn"
+    assert scoring.earnings_quality(2.0, -5.0) == "loss-making on paper, cash-positive"
+    assert scoring.earnings_quality(None, 10.0) is None
+
+
+def test_related_reading_sentences_and_links():
+    links = [("CoinGecko", "https://x/y"), ("Binance", "https://x/z"),
+             ("TradingView", "https://x/w"), ("Block Explorer", "https://x/v")]
+    news = [{"title": "Bitcoin rallies hard", "url": "https://n/1"}]
+    t = msg.related_reading("crypto", "BTCUSD", links, news)
+    assert "Track BTCUSD live on" in t or "Track BTC live on" in t
+    assert '<a href="https://x/y">CoinGecko</a>' in t
+    assert "Bitcoin rallies hard" in t and '<a href="https://n/1">' in t
+    assert "\u2500" in t  # divider present
+    fx = msg.related_reading(
+        "forex", "EURUSD",
+        [("Yahoo Finance", "https://y"), ("Forex Calendar", "https://c")], [])
+    assert "economic calendar" in fx
+    assert "Related headlines" not in fx
+    assert "not financial advice" in t  # footer travels with the tail
+
+
+class _RssSession(_Session):
+    def __init__(self, text):
+        super().__init__(None)
+        self._text = text
+
+    def get(self, url, params=None, timeout=None):
+        self.calls += 1
+        return _RssResp(self._text)
+
+
+class _RssResp:
+    def __init__(self, text):
+        self.text = text
+
+
+def test_news_title_excludes_link_url():
+    rss = ("<rss><channel>"
+           "<item><title>Apple gains on iPhone news</title>"
+           "<link>https://news.google.com/rss/articles/XYZ?oc=5</link>"
+           "<source url=\"https://x\">Yahoo Finance</source></item>"
+           "</channel></rss>")
+    f = Fundamentals(session=_RssSession(rss))
+    items = f.news("AAPL")
+    assert len(items) == 1
+    assert items[0]["title"] == "Apple gains on iPhone news"
+    assert "https://" not in items[0]["title"]
+    assert items[0]["url"].startswith("https://news.google.com")
+
+
+def test_report_new_sections_and_length():
+    data = {"price": 200.0, "high_52w": 220.0, "low_52w": 150.0,
+            "chg_1w": 1.0, "chg_1m": 2.0, "chg_3m": 5.0, "chg_1y": 20.0,
+            "vol_pct": 25.0, "avg_volume_20": 1000, "fscore": 72.0,
+            "fgrade": "B",
+            "fpillars": {"valuation": 15.0, "profitability": 20.0,
+                         "growth": 14.0, "health": 12.0, "momentum": 11.0},
+            "fpe": 22.0, "fnotes": [],
+            "piotroski": {"score": 7, "total": 9, "passed": [], "failed": ["No dilution"]},
+            "earn_quality": "cash-backed earnings",
+            "dcf": {"intrinsic": 250.0, "growth_used": 0.1, "discount": 0.09,
+                    "terminal": 0.025, "years": 5,
+                    "assumptions": "FCF $10.0B growing 10% for 5y"},
+            "dcf_verdict": {"intrinsic": 250.0, "mos_pct": 20.0,
+                            "label": "undervalued"}}
+    t = msg.fundamentals_report("stock", "AAPL", data, "live")
+    assert "Piotroski F-score" in t and "7/9" in t
+    assert "cash-backed earnings" in t
+    assert len(t) < 4000
+    c = {"price_usd": 50000.0, "mcap": 10 ** 12, "volume_24h": 10 ** 10,
+         "change_24h": 1.0, "ath_pct": -20.0, "rank": 1, "cscore": 70.0,
+         "cgrade": "B",
+         "cpillars": {"trend": 28.0, "drawdown_posture": 22.0,
+                      "liquidity": 10.0, "scale": 15.0},
+         "sent_up": 78.0, "dev_commits_4w": 1234, "supply_mined_pct": 94.5}
+    t2 = msg.fundamentals_report("crypto", "BTCUSD", c, "live")
+    assert "78% bullish" in t2 and "1,234 dev commits" in t2 and "94.5%" in t2

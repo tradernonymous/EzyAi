@@ -244,13 +244,11 @@ class Bot:
             data = None
         text = msg.fundamentals_report(kind, pair, data, self.hub.mode)
         links = self.fund.links(kind, pair)
-        text += "\n" + msg.links_block(links)
         try:
-            news = self.fund.news(constants.base_asset(pair))
+            news = self.fund.news(constants.base_asset(pair), limit=4)
         except Exception:
             news = []
-        if news:
-            text += "\n\n<b>Recent headlines</b>\n" + msg.news_block(news)
+        text += msg.related_reading(kind, pair, links, news)
         return text
 
     async def _send_fundamentals(self, update, pair, ctx, query=None):
