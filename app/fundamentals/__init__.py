@@ -1,13 +1,17 @@
 import html
 import re
+import time
 import requests
 
 from .. import constants
+from . import edgar as edgar_mod
+from . import scoring
 
 
 class Fundamentals:
     CG = "https://api.coingecko.com/api/v3"
     NEWS = "https://news.google.com/rss/search"
+    COT = "https://publicreporting.cftc.gov/resource/6dca-aqww.json"
     HEADERS = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) EzyAiBot/1.0",
         "Accept": "application/json",
@@ -17,6 +21,20 @@ class Fundamentals:
         self.session = session or requests.Session()
         self.session.headers.update(self.HEADERS)
         self.timeout = timeout
+        self._cache = {}
+
+    def _cached(self, key, ttl_s, fn, fail_ttl_s=600):
+        now = time.time()
+        hit = self._cache.get(key)
+        if hit and now - hit[0] < ttl_s:
+            return hit[1]
+        try:
+            value = fn()
+        except Exception:
+            self._cache[key] = (now - ttl_s + fail_ttl_s, None)
+            return None
+        self._cache[key] = (now, value)
+        return value
 
     def _get(self, url, params=None):
         r = self.session.get(url, params=params, timeout=self.timeout)
@@ -54,19 +72,27 @@ class Fundamentals:
             detail = self._get(f"{self.CG}/coins/{cid}")
             meta = detail.get("market_data", {})
             links = detail.get("links", {})
-            return {
+            mcap = price.get("usd_market_cap")
+            vol24 = price.get("usd_24h_vol")
+            out = {
                 "id": cid,
                 "name": detail.get("name"),
                 "symbol": detail.get("symbol", "").upper(),
                 "price_usd": price.get("usd"),
-                "mcap": price.get("usd_market_cap"),
-                "volume_24h": price.get("usd_24h_vol"),
+                "mcap": mcap,
+                "volume_24h": vol24,
                 "change_24h": price.get("usd_24h_change"),
                 "high_24h": meta.get("high_24h", {}).get("usd"),
                 "low_24h": meta.get("low_24h", {}).get("usd"),
                 "ath": meta.get("ath", {}).get("usd"),
                 "atl": meta.get("atl", {}).get("usd"),
                 "ath_pct": meta.get("ath_change_percentage", {}).get("usd"),
+                "chg_7d": (meta.get("price_change_percentage_7d_in_currency") or {}).get("usd",
+                    meta.get("price_change_percentage_7d")),
+                "chg_30d": (meta.get("price_change_percentage_30d_in_currency") or {}).get("usd",
+                    meta.get("price_change_percentage_30d")),
+                "chg_1y": (meta.get("price_change_percentage_1y_in_currency") or {}).get("usd",
+                    meta.get("price_change_percentage_1y")),
                 "rank": meta.get("market_cap_rank"),
                 "desc": html.unescape(re.sub(r"<[^>]+>", "",
                                              detail.get("description", {}).get("en", "")))[:400],
@@ -74,6 +100,14 @@ class Fundamentals:
                 "explorer": (links.get("blockchain_site") or [None])[0],
                 "whitepaper": (links.get("whitepaper") or None),
             }
+            out["volume_mcap"] = (vol24 / mcap) if (vol24 and mcap) else None
+            gauge = scoring.crypto_score(
+                out["chg_7d"], out["chg_30d"], out["chg_1y"], out["ath_pct"],
+                out["volume_mcap"], out["rank"])
+            out["cscore"] = gauge["score"]
+            out["cgrade"] = gauge["grade"]
+            out["cpillars"] = gauge["pillars"]
+            return out
         except Exception:
             return None
 
@@ -110,7 +144,54 @@ class Fundamentals:
                 out["source"] = "yahoo quote + derived"
         except Exception:
             pass
+        try:
+            out.update(self.stock_statements(symbol))
+        except Exception:
+            pass
         return out
+
+    def edgar_facts(self, ticker):
+        """Raw SEC company-facts JSON (cached 24h). None for ETFs/unknown."""
+        cik = constants.SEC_CIK.get(ticker.upper())
+        if not cik:
+            return None
+
+        def fetch():
+            r = self.session.get(
+                edgar_mod.EDGAR_FACTS.format(cik=cik), timeout=self.timeout)
+            r.raise_for_status()
+            return r.json()
+
+        return self._cached("edgar:" + ticker.upper(), 86400, fetch)
+
+    def stock_statements(self, symbol):
+        """Parsed statement metrics + score + DCF. Never raises."""
+        try:
+            facts = self.edgar_facts(symbol)
+            if not facts:
+                return {"stat_note": "ETF/basket: no 10-K statements"}
+            m = edgar_mod.statement_metrics(facts)
+            derived = self._derived(symbol, constants.KIND_STOCK) or {}
+            price = derived.get("price")
+            pos = None
+            hi, lo = derived.get("high_1y"), derived.get("low_1y")
+            if price and hi and lo and hi > lo:
+                pos = (price - lo) / (hi - lo)
+            score = scoring.stock_score(m, price, derived.get("chg_3m"), pos)
+            dcf = scoring.dcf_intrinsic(
+                m.get("fcf"), m.get("ocf_cagr_3y"), m.get("shares"),
+                m.get("net_debt") or 0.0)
+            verdict = scoring.dcf_verdict(dcf, price)
+            return {"stat_entity": m.get("entity"), "stat_fy": m.get("fy"),
+                    "stat_metrics": {k: m.get(k) for k in (
+                        "revenue", "net_income", "equity", "fcf", "shares",
+                        "eps", "rev_cagr_3y", "eps_cagr_3y", "ocf_cagr_3y",
+                        "net_margin", "roe", "de_ratio", "current_ratio")},
+                    "fscore": score["score"], "fgrade": score["grade"],
+                    "fpillars": score["pillars"], "fpe": score["pe"],
+                    "fnotes": score["notes"], "dcf": dcf, "dcf_verdict": verdict}
+        except Exception:
+            return {}
 
     @staticmethod
     def _realized_vol(closes, period=252):
@@ -145,10 +226,78 @@ class Fundamentals:
         }
 
     def forex(self, symbol):
-        return self._derived(symbol, constants.KIND_FOREX)
+        d = self._derived(symbol, constants.KIND_FOREX)
+        if d:
+            try:
+                d["verdict"] = scoring.fx_verdict(
+                    symbol, d.get("chg_1w"), d.get("chg_1m"),
+                    d.get("chg_3m"), d.get("vol_pct"))
+            except Exception:
+                pass
+        return d
 
-    def cfd(self, symbol):
-        return self._derived(symbol, constants.KIND_CFD)
+    def cot(self, pair):
+        """CFTC large-speculator positioning for XAUUSD/WTI/UKOIL (weekly)."""
+        target = constants.COT_TARGETS.get((pair or "").upper())
+        if not target:
+            return None
+
+        def fetch():
+            if "name" in target:
+                where = "market_and_exchange_names='%s'" % target["name"]
+            else:
+                where = ("cftc_commodity_code='%s' AND cftc_market_code='%s'"
+                         % (target["code"], target["market"]))
+            rows = self.session.get(
+                self.COT, params={
+                    "$limit": 60, "$where": where,
+                    "$select": "report_date_as_yyyy_mm_dd,"
+                               "market_and_exchange_names,"
+                               "noncomm_positions_long_all,"
+                               "noncomm_positions_short_all,"
+                               "open_interest_all",
+                    "$order": "report_date_as_yyyy_mm_dd DESC",
+                }, timeout=self.timeout).json()
+            by_market = {}
+            for r in rows:
+                try:
+                    by_market.setdefault(r["market_and_exchange_names"], []).append({
+                        "date": r["report_date_as_yyyy_mm_dd"][:10],
+                        "long": int(r["noncomm_positions_long_all"]),
+                        "short": int(r["noncomm_positions_short_all"]),
+                        "oi": int(r["open_interest_all"]),
+                    })
+                except (KeyError, TypeError, ValueError):
+                    continue
+            if not by_market:
+                return None
+            # flagship contract = highest latest open interest
+            name = max(by_market, key=lambda k: by_market[k][0]["oi"])
+            reps = by_market[name]
+            if len(reps) < 1:
+                return None
+            cur = reps[0]
+            net = cur["long"] - cur["short"]
+            prev = reps[1] if len(reps) > 1 else None
+            prev_net = (prev["long"] - prev["short"]) if prev else None
+            return {
+                "market": name, "date": cur["date"],
+                "net_long": net,
+                "wow": (net - prev_net) if prev_net is not None else None,
+                "long": cur["long"], "short": cur["short"],
+                "pct_oi": (net / cur["oi"] * 100) if cur["oi"] else None,
+            }
+
+        return self._cached("cot:" + pair.upper(), 86400, fetch)
+
+    def cfd(self, symbol, tag=None):
+        d = self._derived(symbol, constants.KIND_CFD)
+        if d and tag:
+            try:
+                d["cot"] = self.cot(tag)
+            except Exception:
+                pass
+        return d
 
     def news(self, query, limit=3):
         items = []

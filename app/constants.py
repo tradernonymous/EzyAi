@@ -261,3 +261,29 @@ def base_asset(symbol):
 def binance_symbol(symbol):
     """Display/legacy crypto spelling -> Binance venue symbol (always USDT)."""
     return base_asset(symbol) + "USDT"
+
+
+# SEC EDGAR CIKs for statement-based stock analysis (free, no key).
+# ETFs/baskets have no 10-K statements and are handled price-only.
+SEC_CIK = {
+    "AAPL": 320193, "MSFT": 789019, "GOOGL": 1652044, "AMZN": 1018724,
+    "NVDA": 1045810, "TSLA": 1318605, "META": 1326801, "AMD": 2488,
+    "NFLX": 1065280, "PLTR": 1321655, "COIN": 1679788, "MSTR": 1050446,
+    "NIO": 1736548, "SOFI": 1818874, "RIVN": 1874179, "SHOP": 1594805,
+}
+
+# G10 policy rates in percent, verified Sep 2026 (hiking cycle). Manually
+# maintained: stale values only tilt the carry-bias line, never signals.
+POLICY_RATES_ASOF = "2026-09-05"
+POLICY_RATES = {
+    "USD": (3.62, "Fed"), "EUR": (2.00, "ECB"), "GBP": (3.75, "BoE"),
+    "JPY": (1.00, "BoJ"), "AUD": (4.35, "RBA"), "CHF": (0.00, "SNB"),
+    "CAD": (2.25, "BoC"), "NZD": (2.75, "RBNZ"),
+}
+
+# CFTC legacy-futures targets for COT positioning (free Socrata API).
+COT_TARGETS = {
+    "XAUUSD": {"code": "088 ", "market": "CMX "},
+    "WTI": {"code": "067 ", "market": "NYME"},
+    "UKOIL": {"name": "BRENT CRUDE OIL LAST DAY - NEW YORK MERCANTILE EXCHANGE"},
+}

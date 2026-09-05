@@ -109,6 +109,22 @@ def quote_report(pair, tick):
     )
 
 
+def meter(value, maximum=100.0, width=8):
+    if value is None or maximum <= 0:
+        return "\u25b1" * width
+    filled = max(0, min(width, round(value / maximum * width)))
+    return "\u25b0" * filled + "\u25b1" * (width - filled)
+
+
+def pillars_line(pillars, labels):
+    bits = []
+    for key, label in labels:
+        v = pillars.get(key)
+        if v is not None:
+            bits.append(f"{label} {v:.0f}")
+    return " \u00b7 ".join(bits)
+
+
 def fundamentals_report(kind, symbol, data, hub_mode):
     e = escape
     lines = [f"\U0001f4ca <b>FUNDAMENTALS</b> \u2014 {e(symbol.upper())}"]
@@ -128,6 +144,16 @@ def fundamentals_report(kind, symbol, data, hub_mode):
                 lines.append(f"{lbl}: ${v:,.0f}" if key in ("mcap", "volume_24h") else f"{lbl}: {price(v)}")
         if data.get("desc"):
             lines.append(f"\U0001f4dd {e(data['desc'])}")
+        if data.get("cscore") is not None:
+            lines.append(f"\U0001f3af Momentum gauge: <b>{data['cscore']:.0f}/100 "
+                         f"({data.get('cgrade', '?')})</b> {meter(data['cscore'])}")
+            pl = pillars_line(data.get("cpillars", {}),
+                              (("trend", "Trend"), ("drawdown_posture", "ATH posture"),
+                               ("liquidity", "Liquidity"), ("scale", "Scale")))
+            if pl:
+                lines.append(pl)
+            if data.get("ath_pct") is not None and data["ath_pct"] < 0:
+                lines.append(f"{abs(data['ath_pct']):.0f}% below all-time high")
         links = []
         if data.get("website"):
             links.append(f"\u2022 Website: {e(data['website'])}")
@@ -152,6 +178,30 @@ def fundamentals_report(kind, symbol, data, hub_mode):
                 lines.append(f"Market cap: ${data['marketCap']/1e9:,.2f}B")
             if data.get("trailingPE"):
                 lines.append(f"P/E (trailing): {data['trailingPE']:.1f}")
+            if data.get("stat_note"):
+                lines.append(f"\U0001f4ca {e(data['stat_note'])} (price momentum only).")
+            if data.get("fscore") is not None:
+                ent = f" \u00b7 {e(data['stat_entity'])}" if data.get("stat_entity") else ""
+                lines.append(f"\U0001f3af Fundamental score: <b>{data['fscore']:.0f}/100 "
+                             f"({data.get('fgrade', '?')})</b> {meter(data['fscore'])}{ent}")
+                pl = pillars_line(data.get("fpillars", {}),
+                                  (("valuation", "Value"), ("profitability", "Profit"),
+                                   ("growth", "Growth"), ("health", "Health"),
+                                   ("momentum", "Momentum")))
+                if pl:
+                    lines.append(pl)
+                if data.get("fpe"):
+                    lines.append(f"FY P/E {data['fpe']:.1f} (last reported year)")
+                for note in (data.get("fnotes") or [])[:2]:
+                    lines.append(f"\u2139 {e(note)}")
+            dv = data.get("dcf_verdict")
+            if dv:
+                dcf = data.get("dcf", {})
+                lines.append(f"\U0001f4b0 Fair value: <b>${dv['intrinsic']:,.2f}</b> "
+                             f"vs ${data['price']:,.2f} \u2014 "
+                             f"{dv['label']} ({dv['mos_pct']:+.0f}% margin)")
+                if dcf.get("assumptions"):
+                    lines.append(f"\U0001f9ee DCF: {e(dcf['assumptions'])}")
         else:
             lines.append(e(symbol) + " fundamentals feed unavailable; see links below.")
     elif kind == constants.KIND_CFD:
@@ -162,6 +212,12 @@ def fundamentals_report(kind, symbol, data, hub_mode):
             lines.append(f"Move: 1w {data.get('chg_1w', 0):+.2f}% \u00b7 1m {data.get('chg_1m', 0):+.2f}% \u00b7 "
                          f"3m {data.get('chg_3m', 0):+.2f}% \u00b7 1y {data.get('chg_1y', 0):+.2f}%")
             lines.append(f"Realized volatility (annualized): {data.get('vol_pct', 0):.0f}%")
+            cot = data.get("cot")
+            if cot:
+                arrow = "\U0001f7e2" if (cot.get("wow") or 0) > 0 else "\U0001f534"
+                wow = f" ({cot['wow']:+,} WoW)" if cot.get("wow") is not None else ""
+                lines.append(f"{arrow} Large speculators net "
+                             f"{cot['net_long']:+,} contracts{wow} \u00b7 w/e {cot['date']} (CFTC)")
         else:
             lines.append(f"Market {e(symbol)} \u2014 fundamentals feed unavailable; see links below.")
     elif kind == constants.KIND_FOREX:
@@ -172,6 +228,17 @@ def fundamentals_report(kind, symbol, data, hub_mode):
             lines.append(f"Move: 1w {data.get('chg_1w', 0):+.2f}% \u00b7 1m {data.get('chg_1m', 0):+.2f}% \u00b7 "
                          f"3m {data.get('chg_3m', 0):+.2f}% \u00b7 1y {data.get('chg_1y', 0):+.2f}%")
             lines.append(f"Realized volatility (annualized): {data.get('vol_pct', 0):.0f}%")
+            v = data.get("verdict")
+            if v and v.get("base"):
+                rb = constants.POLICY_RATES.get(v["base"], (None, "?"))
+                rq = constants.POLICY_RATES.get(v["quote"], (None, "?"))
+                carry = f"{v['carry_bp']:+.0f}bp" if v.get("carry_bp") is not None else "n/a"
+                lines.append(f"\U0001f3db Carry: {v['base']} {rb[0]:.2f}% vs "
+                             f"{v['quote']} {rq[0]:.2f}% \u2192 {carry} "
+                             f"(rates {v.get('rates_asof', '')})")
+                trend = ("trends agree" if v["agree"] else "trends conflict")
+                lines.append(f"\U0001f4c8 {v['direction'].capitalize()} \u00b7 {trend} "
+                             f"\u00b7 risk: {v['risk']}")
         else:
             lines.append(f"Currency pair {e(symbol)} \u2014 derived from recent candles (Data: {hub_mode}).")
         lines.append("Watch the economic calendar for rate, inflation and labour surprises.")

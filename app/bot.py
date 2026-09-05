@@ -239,7 +239,7 @@ class Bot:
             elif kind == constants.KIND_FOREX:
                 data = self.fund.forex(pair)
             elif kind == constants.KIND_CFD:
-                data = self.fund.cfd(sym)
+                data = self.fund.cfd(sym, tag=pair)
         except Exception:
             data = None
         text = msg.fundamentals_report(kind, pair, data, self.hub.mode)
