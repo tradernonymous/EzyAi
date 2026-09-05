@@ -164,9 +164,17 @@ def adx(candles, period=14):
         m = md_s[j] / atv * 100.0
         dx_map[j + 1] = abs(p - m) / (p + m) * 100.0 if p + m else 0.0
     indexes = sorted(dx_map)
-    for i in range(period - 1, len(indexes)):
-        window = sum(dx_map[indexes[k]] for k in range(i - period + 1, i + 1))
-        out[indexes[i]] = window / period
+    if len(indexes) < period:
+        return out
+    # Textbook Wilder's ADX: seed with the mean of the first `period` DX
+    # values, then Wilder-recursive smoothing. (A plain rolling mean of DX
+    # would react ~2x faster and break the standard 25/20 strength cutoffs
+    # that strategy.py -- and every charting app users cross-check -- use.)
+    a = sum(dx_map[b] for b in indexes[:period]) / period
+    out[indexes[period - 1]] = a
+    for b in indexes[period:]:
+        a = (a * (period - 1) + dx_map[b]) / period
+        out[b] = a
     return out
 
 

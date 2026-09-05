@@ -1,2 +1,5 @@
 -r requirements.txt
 pytest>=8.0
+# Reference TA library for cross-validating app/analysis/indicators.py (dev/test only,
+# never imported at runtime). Source: awesome-quant "Technical Indicators".
+ta>=0.11.0
