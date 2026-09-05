@@ -127,14 +127,11 @@ def test_watches_keyboard_per_row_buttons():
     assert "ezy:menu:watch" in cbs
 
 
-def test_dash_keyboard_toggles_autopilot():
-    on = _callbacks(ui.dash_keyboard(True))
-    off = _callbacks(ui.dash_keyboard(False))
-    assert "ezy:auto_stop" in on
-    assert "ezy:menu:auto" in off
-    for cbs in (on, off):
-        assert "ezy:menu:analyze" in cbs
-        assert "ezy:menu:watches" in cbs
+def test_dashboard_is_status_only_with_refresh():
+    # dashboard no longer duplicates the bottom menu: status + refresh only
+    cbs = _callbacks(ui.refresh_keyboard())
+    assert cbs == ["ezy:dash"]
+    assert ui.parse_callback("ezy:dash")["a"] == "dash"
 
 
 def test_flow_prompts_reference_steps():

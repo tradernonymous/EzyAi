@@ -24,8 +24,8 @@ follow-ups (Watch / Fundamentals / Quote) on every result.
 - **`/autopilot STYLE MODE`** — auto signals: the bot randomly picks a pair
   from the universe and releases signals based only on those two settings,
   capped by the mode daily limit.
-- **`/dashboard`** — status overview (watches, autopilot, feed) with
-  shortcut buttons to every function.
+- **`/dashboard`** — status overview (watches, autopilot, feed) with a
+  refresh button; all actions live in the persistent button menu.
 - Also: `/watches` (per-row remove buttons), `/unwatch`, `/quote`, `/help`.
 
 ## Markets & data sources (free, no API keys)

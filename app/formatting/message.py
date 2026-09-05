@@ -217,7 +217,7 @@ def dashboard_view(watches, pilot, data_mode):
     else:
         lines.append("\U0001f916 Autopilot: off")
     lines.append(f"Feed: {data_mode}")
-    lines.append("Pick an action below \u2014 everything is one tap away.")
+    lines.append("Use the buttons below \U0001f447 \u2014 everything is one tap away.")
     return "\n".join(lines)
 
 

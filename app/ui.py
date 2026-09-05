@@ -231,17 +231,10 @@ def watches_keyboard(rows):
     return InlineKeyboardMarkup(kb)
 
 
-def dash_keyboard(auto_on):
-    auto_label = "\u23f9 Stop autopilot" if auto_on else "\U0001f916 Start autopilot"
-    auto_cb = "ezy:auto_stop" if auto_on else cb_menu("auto")
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("\U0001f4ca Analyze", callback_data=cb_menu("analyze")),
-         InlineKeyboardButton("\U0001f4b9 Quote", callback_data=cb_menu("quote"))],
-        [InlineKeyboardButton("\U0001f440 Watchlist", callback_data=cb_menu("watches")),
-         InlineKeyboardButton(auto_label, callback_data=auto_cb)],
-        [InlineKeyboardButton("\U0001f4da Fundamentals", callback_data=cb_menu("fund")),
-         InlineKeyboardButton("\u2753 Help", callback_data=cb_menu("help"))],
-    ])
+def refresh_keyboard():
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("\U0001f504 Refresh", callback_data="ezy:dash"),
+    ]])
 
 
 def help_keyboard():
@@ -249,7 +242,7 @@ def help_keyboard():
         [InlineKeyboardButton("\U0001f4ca Analyze a market", callback_data=cb_menu("analyze")),
          InlineKeyboardButton("\U0001f514 Watch a pair", callback_data=cb_menu("watch"))],
         [InlineKeyboardButton("\U0001f916 Autopilot", callback_data=cb_menu("auto")),
-         InlineKeyboardButton("\U0001f4cb Dashboard", callback_data=cb_menu("dash"))],
+         InlineKeyboardButton("\U0001f3e0 Main Menu", callback_data=cb_menu("dash"))],
     ])
 
 

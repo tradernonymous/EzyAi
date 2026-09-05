@@ -130,7 +130,7 @@ class Bot:
         watches = self.service.list_watches(chat_id)
         pilot = self.service.autopilots.get(str(chat_id))
         text = msg.dashboard_view(watches, pilot, self.hub.mode)
-        kb = ui.dash_keyboard(pilot is not None)
+        kb = ui.refresh_keyboard()
         if update.callback_query is not None:
             await self._edit_or_send(update.callback_query, text, kb)
         else:
@@ -339,7 +339,7 @@ class Bot:
     async def cmd_autopilot(self, update, ctx):
         args = ctx.args
         if len(args) < 2:
-            await self._start_flow(update, ctx, "auto")
+            await self._auto_entry(update, ctx)
             return
         style, mode = args[0].lower(), args[1].lower()
         if style not in constants.STYLES or mode not in constants.MODES:
@@ -348,6 +348,30 @@ class Bot:
             return
         self.service.start_autopilot(update.effective_chat.id, style, mode)
         await self._reply(update, msg.auto_started_text(style, mode))
+
+    async def _auto_entry(self, update, ctx, query=None):
+        """Autopilot button: running -> status + stop, else setup flow."""
+        pilot = self.service.autopilots.get(str(update.effective_chat.id))
+        if pilot is not None:
+            text = (f"\U0001f916 Autopilot is <b>ON</b> \u00b7 {pilot.style}/{pilot.mode}\n"
+                    "Scanning random pairs within your daily limit.")
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton("\u23f9 Stop autopilot",
+                                     callback_data="ezy:auto_stop"),
+                InlineKeyboardButton("\U0001f3e0 Menu", callback_data=ui.cb_menu("dash")),
+            ]])
+            if query is not None:
+                await self._edit_or_send(query, text, kb)
+            else:
+                await self._reply(update, text, reply_markup=kb)
+            return
+        ctx.user_data[self._flow_key()] = {"flow": "auto", "page": 0}
+        text = f"{ui.FLOW_TITLE['auto']} \u2014 step 1/2\nPick a style:"
+        kb = ui.style_keyboard("auto")
+        if query is not None:
+            await self._edit_or_send(query, text, kb)
+        else:
+            await self._reply(update, text, reply_markup=kb)
 
     async def cmd_stop_autopilot(self, update, ctx):
         pilot = self.service.autopilots.get(str(update.effective_chat.id))
@@ -440,10 +464,7 @@ class Bot:
                     text, kb = ui.prompt_pair(target)
                     await self._edit_or_send(query, text, kb)
             elif target == "auto":
-                ctx.user_data[self._flow_key()] = {"flow": "auto", "page": 0}
-                await self._edit_or_send(
-                    query, f"{ui.FLOW_TITLE['auto']} \u2014 step 1/2\nPick a style:",
-                    ui.style_keyboard("auto"))
+                await self._auto_entry(update, ctx, query)
             return
 
         if action == "ppage":
@@ -569,14 +590,14 @@ class Bot:
             ctx.user_data.pop(self._flow_key(), None)
             self.service.start_autopilot(chat_id, style, mode)
             await self._edit_or_send(query, msg.auto_started_text(style, mode),
-                                     ui.dash_keyboard(True))
+                                     ui.help_keyboard())
             return
 
         if action == "auto_stop":
             pilot = self.service.autopilots.get(str(chat_id))
             if pilot is None:
                 await self._edit_or_send(query, "No autopilot running.",
-                                         ui.dash_keyboard(False))
+                                         ui.refresh_keyboard())
                 return
             await self._edit_or_send(
                 query, f"\U0001f916 Stop autopilot ({pilot.style}/{pilot.mode})?",
@@ -592,7 +613,7 @@ class Bot:
             ctx.user_data.pop(self._flow_key(), None)
             await self._edit_or_send(
                 query, "Autopilot stopped." if ok else "No autopilot running.",
-                ui.dash_keyboard(False))
+                ui.help_keyboard())
             return
 
         if action == "unwatch":
