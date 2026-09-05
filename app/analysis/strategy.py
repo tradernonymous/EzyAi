@@ -43,49 +43,88 @@ def _spec(side, price, atr_value, support_levels, resistance_levels, mode_profil
     }
 
 
-def _confidence(side, candles, closes, trend, macd_hist, rsi_v, bb_mid, stoch_k, adx_v, reasons):
+def _direction_from(ema9, ema21, ema50, macd_h):
+    """Scalar direction rule shared by analyze() and the offline backtest
+    harness (single source of truth, no lookahead by construction)."""
+    bull_align = bool(ema9 and ema21 and ema50 and ema9 > ema21 > ema50)
+    bear_align = bool(ema9 and ema21 and ema50 and ema9 < ema21 < ema50)
+    if bull_align or (ema21 and ema50 and ema21 > ema50 and macd_h and macd_h > 0):
+        return "up", bull_align, bear_align
+    if bear_align or (ema21 and ema50 and ema21 < ema50 and macd_h and macd_h < 0):
+        return "down", bull_align, bear_align
+    return "neutral", bull_align, bear_align
+
+
+def _confidence_from(side, feats, gates, reasons):
+    """Scalar confidence scorer. feats holds precomputed indicator values
+    for one bar; gates is a SIGNAL_GATES entry (live or candidate)."""
     score = 12.0
-    ema21 = ta.last(ta.ema(closes, 21))
-    ema50 = ta.last(ta.ema(closes, 50))
+    ema21 = feats["ema21"]
+    ema50 = feats["ema50"]
+    adx_v = feats["adx"]
+    macd_hist = feats["macd_hist"]
+    rsi_v = feats["rsi"]
+    bb_mid = feats["bb_mid"]
+    stoch_k = feats["stoch_k"]
+    close = feats["close"]
+    atr_v = feats["atr"]
+    rsi_lo, rsi_hi = gates["rsi_long"] if side == "long" else gates["rsi_short"]
+    macd_ok = macd_hist is not None and (
+        (macd_hist > 0) if side == "long" else (macd_hist < 0))
+    if gates["macd_atr_min"] > 0 and macd_ok and atr_v:
+        macd_ok = abs(macd_hist) >= gates["macd_atr_min"] * atr_v
     if side == "long":
         if ema21 is not None and ema50 is not None and ema21 > ema50:
             score += 22
             reasons.append("EMA21 above EMA50 (bull alignment)")
-        if adx_v is not None and adx_v >= 25:
+        if adx_v is not None and adx_v >= gates["adx_min"]:
             score += 15
             reasons.append(f"ADX {adx_v:.0f} confirms directional strength")
-        if macd_hist is not None and macd_hist > 0:
+        if macd_ok:
             score += 15
             reasons.append("MACD histogram positive")
-        if rsi_v is not None and 45 <= rsi_v <= 68:
+        if rsi_v is not None and rsi_lo <= rsi_v <= rsi_hi:
             score += 15
             reasons.append(f"RSI {rsi_v:.0f} in healthy bullish zone")
-        if bb_mid is not None and closes[-1] > bb_mid:
+        if bb_mid is not None and close > bb_mid:
             score += 12
             reasons.append("Price above midline (bullish bias)")
-        if stoch_k is not None and stoch_k > 50:
+        if stoch_k is not None and stoch_k > gates["stoch_cut"]:
             score += 9
-            reasons.append("Stochastic above 50 (momentum)")
+            reasons.append(f"Stochastic above {gates['stoch_cut']:.0f} (momentum)")
     else:
         if ema21 is not None and ema50 is not None and ema21 < ema50:
             score += 22
             reasons.append("EMA21 below EMA50 (bear alignment)")
-        if adx_v is not None and adx_v >= 25:
+        if adx_v is not None and adx_v >= gates["adx_min"]:
             score += 15
             reasons.append(f"ADX {adx_v:.0f} confirms directional strength")
-        if macd_hist is not None and macd_hist < 0:
+        if macd_ok:
             score += 15
             reasons.append("MACD histogram negative")
-        if rsi_v is not None and 30 <= rsi_v <= 55:
+        if rsi_v is not None and rsi_lo <= rsi_v <= rsi_hi:
             score += 15
             reasons.append(f"RSI {rsi_v:.0f} in healthy bearish zone")
-        if bb_mid is not None and closes[-1] < bb_mid:
+        if bb_mid is not None and close < bb_mid:
             score += 12
             reasons.append("Price below midline (bearish bias)")
-        if stoch_k is not None and stoch_k < 50:
+        if stoch_k is not None and stoch_k < gates["stoch_cut"]:
             score += 9
-            reasons.append("Stochastic below 50 (momentum)")
+            reasons.append(f"Stochastic below {gates['stoch_cut']:.0f} (momentum)")
     return max(0, min(100.0, score))
+
+
+def _confidence(side, candles, closes, trend, macd_hist, rsi_v, bb_mid, stoch_k, adx_v, reasons,
+                gates=None):
+    ema21 = ta.last(ta.ema(closes, 21))
+    ema50 = ta.last(ta.ema(closes, 50))
+    if gates is None:
+        gates = constants.SIGNAL_GATES["intraday"]
+    feats = {"ema21": ema21, "ema50": ema50, "adx": adx_v,
+             "macd_hist": macd_hist, "rsi": rsi_v, "bb_mid": bb_mid,
+             "stoch_k": stoch_k, "close": closes[-1],
+             "atr": ta.last(ta.atr(candles))}
+    return _confidence_from(side, feats, gates, reasons)
 
 
 def analyze(pair, style, mode, hub, interval=None):
@@ -116,12 +155,7 @@ def analyze(pair, style, mode, hub, interval=None):
 
     bull_align = ema9_l and ema21_l and ema50_l and ema9_l > ema21_l > ema50_l
     bear_align = ema9_l and ema21_l and ema50_l and ema9_l < ema21_l < ema50_l
-    if bull_align or (ema21_l and ema50_l and ema21_l > ema50_l and macd_h_l and macd_h_l > 0):
-        direction = "up"
-    elif bear_align or (ema21_l and ema50_l and ema21_l < ema50_l and macd_h_l and macd_h_l < 0):
-        direction = "down"
-    else:
-        direction = "neutral"
+    direction, bull_align, bear_align = _direction_from(ema9_l, ema21_l, ema50_l, macd_h_l)
 
     if direction == "up":
         side = "long"
@@ -142,8 +176,9 @@ def analyze(pair, style, mode, hub, interval=None):
     confidence = 0.0
     if side != "neutral":
         spec = _spec(side, price, atr_v, sup_lv, res_lv, mode_profile)
+        gates = constants.SIGNAL_GATES[style]
         confidence = _confidence(side, candles, closes, direction, macd_h_l, rsi_v,
-                                 bb_mid_l, st_k_l, adx_l, reasons)
+                                 bb_mid_l, st_k_l, adx_l, reasons, gates)
         confidence = min(100.0, confidence * (0.9 + mode_profile["aggression"] * 0.12))
 
     strength = "weak"

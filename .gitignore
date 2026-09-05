@@ -220,3 +220,6 @@ __marimo__/
 # EzyAi runtime state
 state.json
 *.json.tmp
+
+# EzyAi dev-only backtest data cache (scripts/.cache)
+scripts/.cache/

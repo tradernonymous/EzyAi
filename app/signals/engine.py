@@ -12,7 +12,9 @@ def evaluate(analysis):
     if not spec:
         return None
 
-    gate = constants.CONFIDENCE_GATE - mode_profile["aggression"] * 6
+    gates = constants.SIGNAL_GATES.get(analysis.get("style", "intraday"),
+                                         {"conf_gate": constants.CONFIDENCE_GATE})
+    gate = gates["conf_gate"] - mode_profile["aggression"] * 6
     if analysis["confidence"] < gate:
         return None
 

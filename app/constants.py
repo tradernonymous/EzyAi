@@ -82,6 +82,28 @@ MODE_PROFILE = {
 
 CONFIDENCE_GATE = 62
 
+# Tunable signal gates per style. Defaults reproduce the legacy hardcoded
+# thresholds exactly; Phase-2 tuning may adjust them based on backtest
+# evidence (must beat defaults AND a random baseline to ship).
+#   rsi_long/rsi_short: (lo, hi) healthy zones
+#   adx_min:           minimum ADX for the strength bonus / trend filter
+#   stoch_cut:         stochastic momentum cutoff (long: k > cut)
+#   macd_atr_min:      0 = sign only (legacy); >0 requires |hist| >= mult*ATR
+#   conf_gate:         base confidence gate (live gate = conf_gate - aggression*6)
+_DEFAULT_GATES = {
+    "rsi_long": (45.0, 68.0),
+    "rsi_short": (30.0, 55.0),
+    "adx_min": 25.0,
+    "stoch_cut": 50.0,
+    "macd_atr_min": 0.0,
+    "conf_gate": 62.0,
+}
+SIGNAL_GATES = {
+    "scalping": dict(_DEFAULT_GATES),
+    "intraday": dict(_DEFAULT_GATES),
+    "swing": dict(_DEFAULT_GATES),
+}
+
 CRYPTO_UNIVERSE = [
     "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT",
     "DOGEUSDT", "AVAXUSDT", "LINKUSDT", "LTCUSDT", "DOTUSDT", "TRXUSDT",
