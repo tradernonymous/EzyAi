@@ -6,6 +6,10 @@ of safety (hjones20 concept, assumptions always disclosed). Crypto momentum /
 liquidity gauge off CoinGecko market data. FX macro verdict off rate
 differentials + trend agreement (forex-skill concept).
 """
+import calendar
+import datetime
+
+from .. import constants as _c
 
 GRADES = ((85, "A+"), (75, "A"), (60, "B"), (45, "C"), (30, "D"), (0, "F"))
 
@@ -250,8 +254,6 @@ def crypto_score(chg_7d=None, chg_30d=None, chg_1y=None,
 
 def fx_verdict(pair, chg_1w=None, chg_1m=None, chg_3m=None, vol_pct=None,
                rates=None, asof=None):
-    """Macro verdict: carry bias + trend agreement + risk rating."""
-    from .. import constants as _c  # local import: scoring stays import-light
     rates = rates or _c.POLICY_RATES
     s = (pair or "").upper()
     base, quote = (s[:3], s[3:6]) if len(s) == 6 else (None, None)
@@ -284,3 +286,47 @@ def fx_verdict(pair, chg_1w=None, chg_1m=None, chg_3m=None, vol_pct=None,
         "trend_short": t_short, "trend_med": t_med, "agree": agree,
         "direction": direction, "risk": risk,
     }
+
+
+def upcoming_events(kind, pair=None, today=None):
+    """Dated, always-computable macro events (no calendar feed needed).
+
+    - US Nonfarm Payrolls: first Friday of the month (moves USD pairs,
+      gold, US stocks/indices, oil).
+    - CFTC COT release: Fridays for positioning followers (gold/oil).
+    Returns [(date_str, label)] with date_str like "Fri 12 Sep".
+    """
+    today = today or datetime.date.today()
+    events = []
+    nfp = _next_nfp(today)
+    if nfp:
+        events.append((nfp.strftime("%a %d %b"), "US Nonfarm Payrolls"))
+    s = (pair or "").upper()
+    wants_cot = kind in ("cfd",) or s in ("XAUUSD", "XAGUSD", "WTI", "UKOIL")
+    if wants_cot:
+        events.append((_next_weekday(today, 4).strftime("%a %d %b"),
+                       "CFTC positioning (COT)"))
+    return events
+
+
+def _next_nfp(today):
+    y, m = today.year, today.month
+    for _ in range(3):
+        first_friday = _first_weekday(y, m, 4)
+        if first_friday >= today:
+            return first_friday
+        m += 1
+        if m > 12:
+            m, y = 1, y + 1
+    return None
+
+
+def _first_weekday(year, month, weekday):
+    first = datetime.date(year, month, 1)
+    shift = (weekday - first.weekday()) % 7
+    return first + datetime.timedelta(days=shift)
+
+
+def _next_weekday(today, weekday):
+    shift = (weekday - today.weekday()) % 7
+    return today + datetime.timedelta(days=shift)

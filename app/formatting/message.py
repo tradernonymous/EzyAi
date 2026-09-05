@@ -128,6 +128,135 @@ def pillars_line(pillars, labels):
     return " \u00b7 ".join(bits)
 
 
+def _trend_word(chg):
+    if chg is None:
+        return "flat"
+    if chg >= 10:
+        return f"strongly higher ({chg:+.0f}%)"
+    if chg > 0.5:
+        return f"higher ({chg:+.1f}%)"
+    if chg <= -10:
+        return f"sharply lower ({chg:+.0f}%)"
+    if chg < -0.5:
+        return f"lower ({chg:+.1f}%)"
+    return f"flat ({chg:+.1f}%)"
+
+
+def _watchlist_lines(kind, pair):
+    from ..fundamentals import scoring as _sc
+    events = _sc.upcoming_events(kind, pair)
+    if not events:
+        return []
+    lines = ["\U0001f5d3 <b>Next watchlist</b>"]
+    for date, label in events:
+        lines.append(f"\u2022 {date} \u2014 {label}")
+    return lines
+
+
+def outlook_stock(symbol, data):
+    from ..fundamentals import scoring as _sc
+    lines = []
+    if data.get("fscore") is not None:
+        lines.append(f"\U0001f4cb Executive summary: {data.get('fgrade', '?')} fundamentals "
+                     f"({data['fscore']:.0f}/100) \u00b7 price {_trend_word(data.get('chg_3m'))} over 3m.")
+    lines.append(f"\U0001f52e Outlook \u2014 short term {_trend_word(data.get('chg_1w'))}; "
+                 f"medium term {_trend_word(data.get('chg_1y'))}.")
+    risks = []
+    if (data.get("vol_pct") or 0) > 35:
+        risks.append(f"high volatility ({data['vol_pct']:.0f}% annualized) \u2014 size down")
+    dv = data.get("dcf_verdict") or {}
+    if dv.get("label") == "overvalued" and dv.get("mos_pct", 0) < -50:
+        risks.append(f"priced well above DCF value ({dv['mos_pct']:.0f}% margin)")
+    pf = data.get("piotroski") or {}
+    if pf.get("total", 0) >= 5 and pf.get("score", 9) < 4:
+        risks.append(f"weak financial trend (Piotroski {pf['score']}/{pf['total']})")
+    if (data.get("fpe") or 0) > 35:
+        risks.append(f"demanding multiple (FY P/E {data['fpe']:.0f})")
+    lines.append("\u26a0\ufe0f Risks: " + ("; ".join(risks) if risks
+                 else "no elevated flags in this snapshot") + ".")
+    if data.get("fscore") is not None:
+        stance = "constructive" if data["fscore"] >= 60 else (
+            "cautious" if data["fscore"] >= 45 else "defensive")
+        lines.append(f"\u2705 Conclusion: {stance} \u2014 {data.get('fgrade', '?')}-grade "
+                     f"business{((' · ' + dv['label'] + ' on value') if dv.get('label') else '')}.")
+    lines.extend(_watchlist_lines("stock", symbol))
+    return lines
+
+
+def outlook_crypto(symbol, data):
+    lines = []
+    if data.get("cscore") is not None:
+        lines.append(f"\U0001f4cb Executive summary: {data.get('cgrade', '?')} momentum gauge "
+                     f"({data['cscore']:.0f}/100) \u00b7 {_trend_word(data.get('chg_30d'))} over 30d.")
+    lines.append(f"\U0001f52e Outlook \u2014 short term {_trend_word(data.get('chg_7d'))}; "
+                 f"medium term {_trend_word(data.get('chg_30d'))}.")
+    risks = []
+    if (data.get("ath_pct") or 0) < -50:
+        risks.append("deep drawdown zone \u2014 bounce or breakdown territory")
+    if (data.get("volume_mcap") or 1) < 0.01:
+        risks.append("thin turnover vs size")
+    lines.append("\u26a0\ufe0f Risks: " + ("; ".join(risks) if risks
+                 else "no elevated flags in this snapshot") + ".")
+    if data.get("cscore") is not None:
+        lines.append(f"\u2705 Conclusion: {data.get('cgrade', '?')}-grade tape; "
+                     f"trend {_trend_word(data.get('chg_30d'))}.")
+    lines.extend(_watchlist_lines("crypto", symbol))
+    return lines
+
+
+def outlook_cfd(symbol, data):
+    lines = []
+    lines.append(f"\U0001f4cb Executive summary: price {_trend_word(data.get('chg_1y'))} over 1y.")
+    lines.append(f"\U0001f52e Outlook \u2014 short term {_trend_word(data.get('chg_1w'))}; "
+                 f"medium term {_trend_word(data.get('chg_3m'))}.")
+    risks = []
+    if (data.get("vol_pct") or 0) > 35:
+        risks.append(f"high volatility ({data['vol_pct']:.0f}% annualized)")
+    cot = data.get("cot") or {}
+    if cot.get("net_long") and cot.get("wow"):
+        if cot["net_long"] > 0 and cot["wow"] < 0:
+            risks.append(f"crowded long trimming ({cot['wow']:+,} WoW)")
+        elif cot["net_long"] < 0 and cot["wow"] > 0:
+            risks.append(f"crowded short covering ({cot['wow']:+,} WoW)")
+    w, m = data.get("chg_1w") or 0, data.get("chg_3m") or 0
+    if (w > 0.5) != (m > 0.5) and (w < -0.5) != (m < -0.5):
+        risks.append("short vs medium trend conflict \u2014 chop risk")
+    lines.append("\u26a0\ufe0f Risks: " + ("; ".join(risks) if risks
+                 else "no elevated flags in this snapshot") + ".")
+    spec = ""
+    if cot.get("net_long") is not None:
+        side = "net long" if cot["net_long"] > 0 else "net short"
+        spec = f" \u00b7 specs {side}"
+    lines.append(f"\u2705 Conclusion: {_trend_word(data.get('chg_3m'))} medium-term tape{spec}.")
+    lines.extend(_watchlist_lines("cfd", symbol))
+    return lines
+
+
+def outlook_fx(symbol, data):
+    lines = []
+    v = data.get("verdict") or {}
+    if v.get("base"):
+        lines.append(f"\U0001f4cb Executive summary: {v.get('direction', 'mixed')} \u00b7 "
+                     f"{'trends agree' if v.get('agree') else 'trends conflict'} \u00b7 "
+                     f"{v.get('risk', 'medium')} risk.")
+    lines.append(f"\U0001f52e Outlook \u2014 short term {_trend_word(data.get('chg_1w'))}; "
+                 f"medium term {_trend_word(data.get('chg_3m'))}.")
+    risks = []
+    if not v.get("agree", True):
+        risks.append("timeframe conflict \u2014 chop risk")
+    if v.get("carry_bp") is not None and v["carry_bp"] < -200:
+        risks.append(f"negative carry bleed ({v['carry_bp']:.0f}bp)")
+    if (data.get("vol_pct") or 0) > 20:
+        risks.append(f"elevated volatility ({data['vol_pct']:.0f}%)")
+    lines.append("\u26a0\ufe0f Risks: " + ("; ".join(risks) if risks
+                 else "no elevated flags in this snapshot") + ".")
+    if v.get("base"):
+        lines.append(f"\u2705 Conclusion: {v['direction']} bias, {v.get('risk', 'medium')} risk "
+                     f"into coming data.")
+    lines.extend(_watchlist_lines("forex", symbol))
+    return lines
+
+
 def fundamentals_report(kind, symbol, data, hub_mode):
     e = escape
     lines = [f"\U0001f4ca <b>FUNDAMENTALS</b> \u2014 {e(symbol.upper())}"]
@@ -163,6 +292,7 @@ def fundamentals_report(kind, symbol, data, hub_mode):
                 lines.append(f"\U0001f6e0 {int(data['dev_commits_4w']):,} dev commits in 4 weeks")
             if data.get("supply_mined_pct") is not None:
                 lines.append(f"\u26cf {data['supply_mined_pct']:.1f}% of max supply mined")
+            lines.extend(outlook_crypto(symbol, data))
     elif kind == constants.KIND_STOCK:
         if data and data.get("price") is not None:
             if data.get("longName"):
@@ -197,8 +327,10 @@ def fundamentals_report(kind, symbol, data, hub_mode):
                             "average" if pf["score"] >= 4 else "weak")
                 lines.append(f"\U0001f9fe Piotroski F-score: <b>{pf['score']}/{pf['total']}</b> "
                              f"({strength} financial trend)")
-                if pf.get("failed"):
-                    lines.append("Fails: " + ", ".join(e(f_) for f_ in pf["failed"][:3]))
+                rename = {"Cash-backed earnings": "cash accrual test (OCF \u2264 profit)"}
+                failed = [rename.get(f_, f_) for f_ in (pf.get("failed") or [])[:3]]
+                if failed:
+                    lines.append("Fails: " + ", ".join(e(f_) for f_ in failed))
             if data.get("earn_quality"):
                 lines.append(f"\U0001f4a7 Cash conversion: {e(data['earn_quality'])}")
             for note in (data.get("fnotes") or [])[:2]:
@@ -211,6 +343,7 @@ def fundamentals_report(kind, symbol, data, hub_mode):
                              f"{dv['label']} ({dv['mos_pct']:+.0f}% margin)")
                 if dcf.get("assumptions"):
                     lines.append(f"\U0001f9ee DCF: {e(dcf['assumptions'])}")
+            lines.extend(outlook_stock(symbol, data))
         else:
             lines.append(e(symbol) + " fundamentals feed unavailable; see links below.")
     elif kind == constants.KIND_CFD:
@@ -227,6 +360,7 @@ def fundamentals_report(kind, symbol, data, hub_mode):
                 wow = f" ({cot['wow']:+,} WoW)" if cot.get("wow") is not None else ""
                 lines.append(f"{arrow} Large speculators net "
                              f"{cot['net_long']:+,} contracts{wow} \u00b7 w/e {cot['date']} (CFTC)")
+            lines.extend(outlook_cfd(symbol, data))
         else:
             lines.append(f"Market {e(symbol)} \u2014 fundamentals feed unavailable; see links below.")
     elif kind == constants.KIND_FOREX:
@@ -252,6 +386,7 @@ def fundamentals_report(kind, symbol, data, hub_mode):
                 st_q = constants.POLICY_STANCE.get(v["quote"], "n/a")
                 lines.append(f"\U0001f3db Policy stance: {v['base']} {st_b} \u00b7 "
                              f"{v['quote']} {st_q}")
+            lines.extend(outlook_fx(symbol, data))
         else:
             lines.append(f"Currency pair {e(symbol)} \u2014 derived from recent candles (Data: {hub_mode}).")
         lines.append("Watch the economic calendar for rate, inflation and labour surprises.")
@@ -315,8 +450,19 @@ def related_reading(kind, symbol, links, news):
     if news:
         lines.append("")
         lines.append("\U0001f4f0 <b>Related headlines</b>")
+        try:
+            from ..analysis import sentiment as _sent
+            mood = _sent.score_headlines(news)
+        except Exception:
+            mood = None
+        if mood is not None:
+            tone = "bullish" if mood >= 0.15 else ("bearish" if mood <= -0.15 else "mixed")
+            lines.append(f"\U0001f9ed Headline mood: {tone} ({mood:+.2f}, {len(news)} stories)")
         for n in news[:4]:
-            lines.append(f"\u2022 {_linked(n['url'], n['title'])}")
+            title = n["title"]
+            if len(title) > 75:
+                title = title[:74] + "\u2026"
+            lines.append(f"\u2022 {_linked(n['url'], title)}")
     lines.append("")
     lines.append("\u26a0\ufe0f Educational research only \u2014 not financial advice. "
                  "Verify prices with your broker before acting.")

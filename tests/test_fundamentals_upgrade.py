@@ -330,6 +330,49 @@ def test_news_title_excludes_link_url():
     assert items[0]["url"].startswith("https://news.google.com")
 
 
+def test_upcoming_events_computed():
+    import datetime
+    from app.fundamentals import scoring as sc
+    # Sat 2026-09-05: NFP was Fri 4 Sep -> next is Fri 2 Oct; COT next Fri 11 Sep
+    sat = datetime.date(2026, 9, 5)
+    ev = sc.upcoming_events("forex", "EURUSD", sat)
+    assert ev == [("Fri 02 Oct", "US Nonfarm Payrolls")]
+    ev_gold = sc.upcoming_events("cfd", "XAUUSD", sat)
+    assert ("Fri 11 Sep", "CFTC positioning (COT)") in ev_gold
+    assert ev_gold[0][0] == "Fri 02 Oct"
+    # a Friday returns itself for COT
+    fri = datetime.date(2026, 9, 11)
+    assert ("Fri 11 Sep", "CFTC positioning (COT)") in sc.upcoming_events("cfd", "WTI", fri)
+
+
+def test_outlook_sections_present():
+    data = {"price": 200.0, "chg_1w": 1.0, "chg_3m": 5.0, "chg_1y": 20.0,
+            "vol_pct": 40.0, "fscore": 72.0, "fgrade": "B",
+            "dcf_verdict": {"intrinsic": 100.0, "mos_pct": -60.0, "label": "overvalued"},
+            "piotroski": {"score": 3, "total": 9, "passed": [], "failed": []},
+            "fpe": 40.0}
+    t = "\n".join(msg.outlook_stock("AAPL", data))
+    assert "Executive summary" in t and "Outlook" in t
+    assert "high volatility" in t and "DCF value" in t and "demanding multiple" in t
+    assert "weak financial trend" in t and "Conclusion" in t
+    assert "Nonfarm Payrolls" in t
+    fx = {"chg_1w": 1.0, "chg_3m": -2.0, "vol_pct": 8.0,
+          "verdict": {"base": "EUR", "quote": "USD", "carry_bp": -250.0,
+                      "agree": False, "direction": "mixed", "risk": "low"}}
+    t2 = "\n".join(msg.outlook_fx("EURUSD", fx))
+    assert "chop risk" in t2 and "carry bleed" in t2
+
+
+def test_headlines_trimmed_to_one_line():
+    import re
+    long_title = ("Stocks surge to records as bulls celebrate a massive rally " * 3).strip()
+    t = msg.related_reading("stock", "AAPL", [], [{"title": long_title, "url": "https://n/1"}])
+    line = [l for l in t.splitlines() if "Stocks surge" in l][0]
+    plain = re.sub(r"<[^>]+>", "", line)
+    assert len(plain) <= 80 and plain.endswith("\u2026")
+    assert "Headline mood: bullish" in t
+
+
 def test_report_new_sections_and_length():
     data = {"price": 200.0, "high_52w": 220.0, "low_52w": 150.0,
             "chg_1w": 1.0, "chg_1m": 2.0, "chg_3m": 5.0, "chg_1y": 20.0,
