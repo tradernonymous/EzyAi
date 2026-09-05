@@ -200,8 +200,50 @@ def watch_list(rows):
     lines = ["<b>Active watch list</b>"]
     for w in rows:
         lines.append(f"\u2022 {w['pair']} \u2014 {w['style']}/{w['mode']} "
-                     f"(last alert {('yes' if w['last_signal_ts'] else 'no')})")
+                      f"(last alert {('yes' if w['last_signal_ts'] else 'no')})")
     return "\n".join(lines)
+
+
+def dashboard_view(watches, pilot, data_mode):
+    lines = ["\U0001f4cb <b>EzyAi dashboard</b>"]
+    if watches:
+        shown = ", ".join(f"{w['pair']} ({w['style']}/{w['mode']})" for w in watches[:4])
+        extra = f" +{len(watches) - 4} more" if len(watches) > 4 else ""
+        lines.append(f"\U0001f440 Watching ({len(watches)}): {shown}{extra}")
+    else:
+        lines.append("\U0001f440 Watching (0): tap Watchlist to add your first alert.")
+    if pilot is not None:
+        lines.append(f"\U0001f916 Autopilot: <b>ON</b> \u00b7 {pilot.style}/{pilot.mode}")
+    else:
+        lines.append("\U0001f916 Autopilot: off")
+    lines.append(f"Feed: {data_mode}")
+    lines.append("Pick an action below \u2014 everything is one tap away.")
+    return "\n".join(lines)
+
+
+def confirm_watch_text(pair, style, mode, check_s, rr, risk_pct):
+    return (
+        f"\U0001f514 Confirm watch\n<b>{pair}</b> \u00b7 {style}/{mode}\n"
+        f"Checks every {check_s}s \u00b7 target RR {rr} \u00b7 risk {risk_pct:.1f}%/trade."
+    )
+
+
+def confirm_auto_text(style, mode, daily_limit):
+    return (
+        f"\U0001f916 Confirm autopilot\n{style}/{mode} \u00b7 random pairs \u00b7 "
+        f"up to {daily_limit} signals/day.\n"
+        "You can stop it anytime from the dashboard."
+    )
+
+
+def watch_added_text(pair, style, mode):
+    return (f"\u2705 Watch live: <b>{pair}</b> \u00b7 {style}/{mode}\n"
+            "You will get a signal the moment a setup passes your risk rules.")
+
+
+def auto_started_text(style, mode):
+    return (f"\u2705 Autopilot live: {style}/{mode}\n"
+            "Scanning random pairs for you. Sit back.")
 
 
 def autopilot_view(pilots):

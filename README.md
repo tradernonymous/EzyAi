@@ -7,9 +7,14 @@ intraday / swing) and *risk mode* (safe / normal / aggressive).
 
 ## Features
 
-- **`/analyze`** — on-demand market analysis on a chosen pair + timeframe:
-  trend, support/resistance, entry zone, stop loss, TP1/TP2, risk-reward,
-  confidence score and exit rules.
+Everything below works two ways: tap the **persistent button menu**
+(always on screen) or type the commands. Every flow is guided
+(pair → style → risk mode) with Back/Cancel, confirmations, and one-tap
+follow-ups (Watch / Fundamentals / Quote) on every result.
+
+- **`/analyze`** — on-demand market analysis: trend, support/resistance,
+  entry zone, stop loss, TP1/TP2, risk-reward, confidence score, exit rules,
+  plus pattern / sentiment / volatility / session context notes.
 - **`/watch PAIR STYLE MODE`** — live trade alerts for a specific pair.
   Style sets the timeframe and check frequency; mode sets risk per trade,
   R/R targets, confirmation strictness and daily signal limits.
@@ -19,13 +24,15 @@ intraday / swing) and *risk mode* (safe / normal / aggressive).
 - **`/autopilot STYLE MODE`** — auto signals: the bot randomly picks a pair
   from the universe and releases signals based only on those two settings,
   capped by the mode daily limit.
-- Also: `/watches`, `/unwatch`, `/quote`, `/help`.
+- **`/dashboard`** — status overview (watches, autopilot, feed) with
+  shortcut buttons to every function.
+- Also: `/watches` (per-row remove buttons), `/unwatch`, `/quote`, `/help`.
 
 ## Markets & data sources (free, no API keys)
 
 | Market | Provider | Examples |
 | --- | --- | --- |
-| Crypto | Binance public API (multi-host fallback) | `BTCUSDT`, `ETHUSDT`, `SOLUSDT` |
+| Crypto | Binance public API (multi-host) → ccxt fallback (Kraken/Coinbase, no key) | `BTCUSDT`, `ETHUSDT`, `SOLUSDT` |
 | Forex | Yahoo Finance chart API | `EURUSD`, `GBPUSD`, `USDJPY` |
 | Stocks / ETFs | Yahoo Finance chart API | `AAPL`, `TSLA`, `SPY`, `QQQ` |
 | Metals / energy / indices (CFD-style) | Yahoo Finance chart API | `XAUUSD`, `XAGUSD`, `WTI`, `US30`, `NAS100`, `SPX500` |
