@@ -1,0 +1,21 @@
+app = "ezytradeai"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  EZYAI_STATE_FILE = "/data/state.json"
+  EZYAI_LOG_LEVEL = "INFO"
+  PORT = "8080"
+
+[mounts]
+  source = "ezyai_state"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = false
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines = 1

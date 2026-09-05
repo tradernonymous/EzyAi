@@ -73,6 +73,35 @@ main.py                  entry point
 tests/                   pytest suite (engine, indicators, risk, constants)
 ```
 
+## Deploy to Fly.io (free, always-on)
+
+The repo ships a `Dockerfile`, `fly.toml`, and a health endpoint so the bot
+stays awake 24/7 on Fly.io's free allowance.
+
+```bash
+# 1. install flyctl
+winget install fly-io.flyctl        # Windows
+
+# 2. login
+fly auth login
+
+# 3. create the persistent state volume
+fly launch --no-deploy             # follow prompts; app name in fly.toml can be changed
+fly volumes create ezyai_state --size 1
+
+# 4. inject the secret (never commit it)
+fly secrets set TELEGRAM_BOT_TOKEN="your_token_from_botfather"
+
+# 5. deploy
+fly deploy
+
+# 6. watch logs
+fly logs
+```
+
+Then `/start` your bot in Telegram. State (watches/autopilots) is kept on the
+`/data` volume and survives redeploys.
+
 ## Notes
 
 - Signals are rule-based confluence (EMA alignment, ADX, RSI, MACD,

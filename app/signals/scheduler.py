@@ -31,17 +31,21 @@ class Service:
         self.daily_counters = data.get("daily", {})
 
     def _save(self):
-        payload = {
-            "watches": list(self.watches.values()),
-            "autopilots": [
-                {"chat_id": a.chat_id, "style": a.style, "mode": a.mode}
-                for a in self.autopilots.values()
-            ],
-            "daily": self.daily_counters,
-        }
-        tmp = self.state_path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        tmp.replace(self.state_path)
+        try:
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "watches": list(self.watches.values()),
+                "autopilots": [
+                    {"chat_id": a.chat_id, "style": a.style, "mode": a.mode}
+                    for a in self.autopilots.values()
+                ],
+                "daily": self.daily_counters,
+            }
+            tmp = self.state_path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            tmp.replace(self.state_path)
+        except Exception:
+            pass
 
     @staticmethod
     def _watch_key(chat_id, pair):
