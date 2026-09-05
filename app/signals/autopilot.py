@@ -23,7 +23,8 @@ class AutoPilot:
     def run(self, daily_counters):
         now = time.time()
         profile = constants.MODE_PROFILE[self.mode]
-        key = f"{self.style}:{self.mode}"
+        # quota is per chat: one busy user must not consume another's limit
+        key = f"{self.chat_id}:{self.style}:{self.mode}"
         today = self._utc_today()
         counter = daily_counters.get(key, {})
         if counter.get("date") != today:

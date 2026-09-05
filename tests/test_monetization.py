@@ -1,5 +1,6 @@
 import asyncio
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -72,6 +73,56 @@ def test_plans_persist(tmp_path):
     svc2 = Service(object(), tmp_path / "state.json")
     assert svc2.is_pro(4) and svc2.is_pro(5)
     assert svc2.plan_status(4)["trial_used"] is True
+
+
+def test_stripe_events_idempotent(tmp_path):
+    svc = _svc(tmp_path)
+    u1 = svc.activate_pro(6, 1, event_id="evt_dup")
+    u2 = svc.activate_pro(6, 1, event_id="evt_dup")
+    assert u2 == u1  # redelivered webhook must not stack another month
+    assert svc.already_processed("evt_dup")
+    assert not svc.already_processed("evt_other")
+
+
+def test_stars_charge_id_dedup(tmp_path):
+    svc = _svc(tmp_path)
+    until = svc.activate_pro(7, 1, event_id="charge_abc")
+    again = svc.activate_pro(7, 1, event_id="charge_abc")
+    assert again == until  # Telegram redelivery after restart: single grant
+
+
+def test_paid_events_persist(tmp_path):
+    svc = _svc(tmp_path)
+    svc.activate_pro(8, 1, event_id="evt_persisted")
+    svc2 = Service(object(), tmp_path / "state.json")
+    assert svc2.already_processed("evt_persisted")
+    assert svc2.is_pro(8)
+
+
+def test_concurrent_mutations_no_corruption(tmp_path):
+    svc = _svc(tmp_path)
+    errors = []
+
+    def writer(chat):
+        try:
+            for _ in range(25):
+                svc.activate_pro(chat, 1, event_id=f"evt_{chat}_{_}")
+                svc.add_watch(chat, "BTCUSD", "intraday", "normal")
+                svc.start_trial(chat)
+        except Exception as exc:  # pragma: no cover
+            errors.append(exc)
+
+    threads = [threading.Thread(target=writer, args=(100 + i,))
+               for i in range(4)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert not errors
+    for i in range(4):
+        assert svc.is_pro(100 + i)
+    # state must reload cleanly and keep every activation
+    svc2 = Service(object(), tmp_path / "state.json")
+    for i in range(4):
+        assert svc2.is_pro(100 + i)
 
 
 def test_team_access_lists(tmp_path):
@@ -232,7 +283,7 @@ class _FakeService:
     def __init__(self):
         self.calls = []
 
-    def activate_pro(self, chat_id, months):
+    def activate_pro(self, chat_id, months, event_id=None):
         self.calls.append((chat_id, months))
         return 999.0
 

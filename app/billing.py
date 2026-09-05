@@ -72,11 +72,12 @@ def verify_stripe_event(payload_bytes, sig_header, secret):
         return None
 
 
-def fulfill_checkout_session(session, service):
+def fulfill_checkout_session(session, service, event_id=None):
     """Activate PRO from a checkout.session.completed object.
 
-    session may be a stripe object or a plain dict (tests). Returns
-    (chat_id, tier_id, until) or None.
+    session may be a stripe object or a plain dict (tests). event_id is the
+    Stripe event id, passed through for idempotency so retried deliveries
+    never grant a second period. Returns (chat_id, tier_id, until) or None.
     """
     if isinstance(session, dict):
         paid = session.get("payment_status")
@@ -94,5 +95,5 @@ def fulfill_checkout_session(session, service):
     if not info:
         return None
     months = constants.PLANS[info["tier"]]["months"]
-    until = service.activate_pro(info["chat_id"], months)
+    until = service.activate_pro(info["chat_id"], months, event_id=event_id)
     return info["chat_id"], info["tier"], until

@@ -34,7 +34,7 @@ class Bot:
 
     def _register(self):
         a = self.app
-        a.post_init = self._post_init
+        a.post_init = self.post_init_hook
         a.add_handler(CommandHandler("start", self.cmd_start))
         a.add_handler(CommandHandler("help", self.cmd_help))
         a.add_handler(CommandHandler("dashboard", self.cmd_dashboard))
@@ -54,7 +54,7 @@ class Bot:
         a.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.on_text))
         a.job_queue.run_repeating(self._job, interval=30, first=30)
 
-    async def _post_init(self, app):
+    async def post_init_hook(self, app):
         try:
             from telegram import BotCommand
             await app.bot.set_my_commands(
@@ -172,17 +172,21 @@ class Bot:
             await self._edit_or_send(query, status)
         else:
             await self._reply(update, status)
-            try:
-                headlines = self.fund.news(constants.base_asset(pair), limit=5)
-            except Exception:
-                headlines = []
+        try:
+            headlines = await asyncio.to_thread(
+                self.fund.news, constants.base_asset(pair), 5)
+        except Exception:
+            headlines = []
         try:
             score = _sent.score_headlines(headlines)
         except Exception:
             score = None
         try:
-            analysis = signal_engine.quick_analyze(
-                pair, style, mode, self.hub, sentiment=score)[0]
+            # feeds are blocking requests: run them off the event loop so
+            # other users keep getting replies while this scan runs
+            analysis = (await asyncio.to_thread(
+                signal_engine.quick_analyze,
+                pair, style, mode, self.hub, None, score))[0]
         except Exception as exc:
             target = query.message if query is not None else None
             text = f"Analysis failed: {exc}"
@@ -210,7 +214,7 @@ class Bot:
     async def _send_quote(self, update, pair, ctx, query=None):
         await self._typing(update, ctx)
         try:
-            tick = self.hub.fetch_ticker(pair)
+            tick = await asyncio.to_thread(self.hub.fetch_ticker, pair)
             tick["mode"] = "demo" if self.hub.mode == "demo" else "live"
         except Exception:
             text = f"Could not fetch <b>{pair}</b>."
@@ -266,7 +270,9 @@ class Bot:
         await self._typing(update, ctx)
         pro = self.service.is_pro(update.effective_chat.id)
         try:
-            text = self._fundamentals_text(pair, pro=pro)
+            # EDGAR/Coingecko/COT fetches are slow synchronous requests;
+            # run off the loop so other users keep getting replies
+            text = await asyncio.to_thread(self._fundamentals_text, pair, pro)
         except Exception:
             text = None
         if not text:
@@ -556,6 +562,47 @@ class Bot:
         else:
             await self._reply(update, text, reply_markup=kb)
 
+    async def _submit_usdt_claim(self, update, ctx, txid):
+        flow = self._get_flow(ctx)
+        tier = (flow or {}).get("usdt_tier")
+        name = (flow or {}).get("usdt_name") or "user"
+        ctx.user_data.pop(self._flow_key(), None)
+        if not tier:
+            return
+        plan = billing.tier(tier)
+        admin_id = (self.pay or {}).get("admin_id")
+        if not plan or not admin_id:
+            await self._reply(update, "Payment desk offline \u2014 use Stars for instant PRO.")
+            return
+        txid = (txid or "").strip()
+        if len(txid) < 8 or len(txid) > 200:
+            await self._reply(update, "That doesn't look like a valid TXID. "
+                                      "It's the long alphanumeric string from your "
+                                      "transfer confirmation \u2014 try again, or "
+                                      "/cancel to stop.")
+            return
+        chat_id = update.effective_chat.id
+        try:
+            await ctx.bot.send_message(
+                admin_id,
+                f"\U0001f4b0 USDT claim: <b>{name}</b> (id <code>{chat_id}</code>)\n"
+                f"claims <b>{plan['label']}</b> \u2014 ${plan['usd']:.2f}\n"
+                f"TXID: <code>{txid}</code>\n"
+                "Approve after checking the network.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        "\u2705 Approve", callback_data=ui.cb_admin_ok(chat_id, tier)),
+                    InlineKeyboardButton(
+                        "\u274c Reject", callback_data=ui.cb_admin_no(chat_id)),
+                ]]))
+            await self._reply(update, "Claim sent with your TXID \u2014 an admin "
+                                      "verifies within a few hours. You'll get PRO "
+                                      "automatically.")
+        except Exception as exc:
+            logger.warning("usdt claim forward failed: %s", exc)
+            await self._reply(update, "Could not reach the payment desk \u2014 try Stars.")
+
     async def on_precheckout(self, update, ctx):
         q = update.pre_checkout_query
         ok = billing.decode_payload(q.invoice_payload) is not None
@@ -570,7 +617,12 @@ class Bot:
         if not info:
             return
         months = constants.PLANS[info["tier"]]["months"]
-        until = self.service.activate_pro(info["chat_id"], months)
+        # charge id makes Telegram redeliveries (e.g. after a restart)
+        # idempotent: the same payment can never grant two periods
+        charge_id = (getattr(sp, "telegram_payment_charge_id", None)
+                     or getattr(sp, "provider_payment_charge_id", None))
+        until = self.service.activate_pro(info["chat_id"], months,
+                                          event_id=charge_id)
         import datetime
         date = datetime.datetime.fromtimestamp(until, datetime.timezone.utc).strftime("%d %b %Y")
         try:
@@ -879,25 +931,20 @@ class Bot:
                 return
             user = update.effective_user
             name = (user.full_name if user else f"user {chat_id}") or f"user {chat_id}"
-            try:
-                await ctx.bot.send_message(
-                    admin_id,
-                    f"\U0001f4b0 USDT claim: <b>{name}</b> (id <code>{chat_id}</code>)\n"
-                    f"claims <b>{plan['label']}</b> \u2014 ${plan['usd']:.2f}. Approve?",
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=InlineKeyboardMarkup([[
-                        InlineKeyboardButton("\u2705 Approve",
-                                             callback_data=ui.cb_admin_ok(chat_id, tier)),
-                        InlineKeyboardButton("\u274c Reject",
-                                             callback_data=ui.cb_admin_no(chat_id)),
-                    ]]))
-                await self._edit_or_send(
-                    query, "Claim sent \u2014 an admin approves within a few hours. "
-                           "You will get PRO automatically.")
-            except Exception as exc:
-                logger.warning("usdt claim forward failed: %s", exc)
-                await self._edit_or_send(query, "Could not reach the payment desk \u2014 try Stars.")
-            return
+            flow = self._get_flow(ctx)
+        flow.update({"step": "usdt_txid", "usdt_tier": tier,
+                     "usdt_name": name})
+        ctx.user_data[self._flow_key()] = flow
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton(
+            "\u2715 Cancel", callback_data="ezy:cancel")]])
+        await self._edit_or_send(
+            query,
+            "Almost done \u2014 send me the <b>transaction hash (TXID)</b> of your "
+            f"{plan['label']} transfer so the desk can verify it.\n\n"
+            "(It's the long string that starts with a few letters/digits "
+            "on your wallet's transfer confirmation.)",
+            kb)
+        return
 
         if action in ("admin_ok", "admin_no"):
             admin_id = (self.pay or {}).get("admin_id")
@@ -954,6 +1001,9 @@ class Bot:
                 await self._start_flow(update, ctx, routed)
             return
         flow = ctx.user_data.get(self._flow_key())
+        if flow and flow.get("step") == "usdt_txid":
+            await self._submit_usdt_claim(update, ctx, text)
+            return
         if not flow or flow.get("step") != "custom_pair":
             return
         pair = text.upper()

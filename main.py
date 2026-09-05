@@ -4,7 +4,7 @@ import logging
 import os
 import sys
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from app import billing, config
 from app.bot import Bot
@@ -29,20 +29,47 @@ def _ev(event, *path):
     return cur
 
 
+def admin_alert(bot_app, text):
+    """Best-effort notify the configured admin of a paid-flow failure."""
+    try:
+        admin = config.admin_id()
+        if not admin:
+            return
+        async def _send():
+            await bot_app.bot.send_message(
+                admin, f"\u26a0\ufe0f {text}", parse_mode="HTML")
+        loop = getattr(bot_app, "_ezy_loop", None)
+        if loop is not None and loop.is_running():
+            asyncio.run_coroutine_threadsafe(_send(), loop).result(timeout=10)
+        else:
+            asyncio.run(_send())
+    except Exception as exc:
+        logger.warning("admin alert failed: %s", exc)
+
+
 def notify_pro_active(bot_app, chat_id, tier, until):
+    """Send the PRO confirmation from the webhook thread.
+
+    Schedules onto the bot's own running event loop instead of spinning up
+    a fresh one per payment (asyncio.run would build a new HTTP client each
+    time and can silently drop the confirmation).
+    """
     date = datetime.datetime.fromtimestamp(until, datetime.timezone.utc).strftime("%d %b %Y")
+    text = (f"\u2705 <b>PRO activated</b> \u00b7 {tier} until {date}.\n"
+            "Your watches resume automatically. Enjoy!")
 
     async def _send():
-        await bot_app.bot.send_message(
-            chat_id,
-            f"\u2705 <b>PRO activated</b> \u00b7 {tier} until {date}.\n"
-            "Your watches resume automatically. Enjoy!",
-            parse_mode="HTML")
+        await bot_app.bot.send_message(chat_id, text, parse_mode="HTML")
 
+    loop = getattr(bot_app, "_ezy_loop", None)
     try:
-        asyncio.run(_send())
+        if loop is not None and loop.is_running():
+            fut = asyncio.run_coroutine_threadsafe(_send(), loop)
+            fut.result(timeout=20)
+        else:
+            asyncio.run(_send())
     except Exception as exc:
-        logger.warning("pro notify failed: %s", exc)
+        logger.warning("pro notify failed chat=%s: %s", chat_id, exc)
 
 
 def start_webhook_server(service, bot_app):
@@ -72,22 +99,37 @@ def start_webhook_server(service, bot_app):
                 self.send_response(400)
                 self.end_headers()
                 return
+            # ack fast so Stripe never retries on our processing time
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"ok")
-            if _ev(event, "type") == "checkout.session.completed":
+            event_id = _ev(event, "id")
+            if _ev(event, "type") != "checkout.session.completed":
+                return
+            if service.already_processed(event_id):
+                logger.info("stripe webhook replay ignored id=%s", event_id)
+                return
+            result = None
+            try:
                 result = billing.fulfill_checkout_session(
-                    _ev(event, "data", "object"), service)
-                if result:
-                    chat_id, tier, until = result
-                    logger.info("stripe PRO activated chat=%s tier=%s", chat_id, tier)
-                    notify_pro_active(bot_app, chat_id, tier, until)
+                    _ev(event, "data", "object"), service, event_id=event_id)
+            except Exception as exc:
+                logger.exception("stripe fulfillment failed id=%s", event_id)
+                admin_alert(bot_app,
+                            f"Stripe payment <b>{event_id}</b> failed to "
+                            f"activate PRO: {exc} \u2014 check manually.")
+            if result:
+                chat_id, tier, until = result
+                logger.info("stripe PRO activated chat=%s tier=%s id=%s",
+                            chat_id, tier, event_id)
+                notify_pro_active(bot_app, chat_id, tier, until)
 
         def log_message(self, *args):
             pass
 
+    # threaded: a slow webhook must never block Fly's health probe
     threading.Thread(
-        target=HTTPServer(("0.0.0.0", port), Handler).serve_forever,
+        target=ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever,
         daemon=True,
     ).start()
 
@@ -121,7 +163,16 @@ def main():
 
     start_webhook_server(service, bot.app)
     logger.info("starting EzyAi ...")
-    bot.app.run_polling(drop_pending_updates=True)
+
+    async def _remember_loop(app):
+        # webhook thread needs a handle on the running loop
+        app._ezy_loop = asyncio.get_running_loop()
+        await bot.post_init_hook(app)
+
+    bot.app.post_init = _remember_loop
+    # drop_pending_updates stays False: a Stars payment confirmation queued
+    # during a restart must still be delivered, or the user pays for nothing
+    bot.app.run_polling(drop_pending_updates=False)
 
 
 if __name__ == "__main__":

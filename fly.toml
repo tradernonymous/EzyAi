@@ -23,8 +23,15 @@ primary_region = 'ams'
   auto_stop_machines = 'off'
   auto_start_machines = true
 
+[checks]
+  [checks.http]
+    method = 'GET'
+    path = '/'
+    grace_period = '30s'
+    interval = '30s'
+    timeout = '5s'
+
 [[vm]]
-  memory = '1gb'
+  memory = '512mb'
   cpu_kind = 'shared'
   cpus = 1
-  memory_mb = 256
