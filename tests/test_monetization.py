@@ -3,6 +3,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -308,3 +309,91 @@ def test_fulfill_checkout_session():
 def test_verify_stripe_event_rejects_garbage():
     assert billing.verify_stripe_event(b"{}", "bad", "whsec_x") is None
     assert billing.verify_stripe_event(b"", "", "") is None
+
+
+# -- usdt proof (screenshot or txid) -------------------------------------------
+
+
+class _FakeChat:
+    def __init__(self, chat_id):
+        self.id = chat_id
+        self.sent = []
+
+    async def send_message(self, text, **kw):
+        self.sent.append((text, kw))
+        return None
+
+
+class _FakeBotSide:
+    def __init__(self):
+        self.photos = []
+        self.messages = []
+
+    async def send_photo(self, chat_id, file_id, **kw):
+        self.photos.append((chat_id, file_id, kw))
+        return None
+
+    async def send_message(self, chat_id, text, **kw):
+        self.messages.append((chat_id, text, kw))
+        return None
+
+
+def _proof_bot(tmp_path):
+    from app.bot import Bot
+    svc = Service(object(), tmp_path / "state.json")
+    return Bot("0" * 46, object(), svc, pay_config={
+        "admin_id": 99, "usdt_address": "TXYZ123"})
+
+
+def _proof_ctx(side):
+    return SimpleNamespace(
+        user_data={"ezyai_flow": {"step": "usdt_proof", "usdt_tier": "1mo",
+                                  "usdt_name": "Test User"}},
+        bot=side)
+
+
+def test_usdt_screenshot_forwarded_to_admin(tmp_path):
+    bot = _proof_bot(tmp_path)
+    side = _FakeBotSide()
+    chat = _FakeChat(42)
+    update = SimpleNamespace(
+        message=SimpleNamespace(photo=[SimpleNamespace(file_id="small"),
+                                       SimpleNamespace(file_id="big")]),
+        effective_chat=chat,
+        effective_user=SimpleNamespace(full_name="Test User", id=42))
+    asyncio.run(bot.on_photo(update, _proof_ctx(side)))
+    assert len(side.photos) == 1
+    admin_id, file_id, kw = side.photos[0]
+    assert admin_id == 99 and file_id == "big"  # largest size forwarded
+    assert "USDT claim" in kw["caption"] and "1 month" in kw["caption"]
+    cbs = [b.callback_data for row in kw["reply_markup"].inline_keyboard
+           for b in row]
+    assert "ezy:admin_ok:42:1mo" in cbs and "ezy:admin_no:42" in cbs
+    assert any("Screenshot received" in t for t, _ in chat.sent)
+
+
+def test_usdt_photo_without_claim_ignored(tmp_path):
+    bot = _proof_bot(tmp_path)
+    side = _FakeBotSide()
+    chat = _FakeChat(43)
+    update = SimpleNamespace(
+        message=SimpleNamespace(photo=[SimpleNamespace(file_id="x")]),
+        effective_chat=chat,
+        effective_user=SimpleNamespace(full_name="U", id=43))
+    ctx = SimpleNamespace(user_data={}, bot=side)
+    asyncio.run(bot.on_photo(update, ctx))
+    assert side.photos == [] and chat.sent == []
+
+
+def test_usdt_txid_text_still_accepted(tmp_path):
+    bot = _proof_bot(tmp_path)
+    side = _FakeBotSide()
+    chat = _FakeChat(44)
+    update = SimpleNamespace(
+        message=SimpleNamespace(text="ABCDEF1234567890"),
+        effective_chat=chat,
+        effective_user=SimpleNamespace(full_name="Test User", id=44))
+    asyncio.run(bot.on_text(update, _proof_ctx(side)))
+    assert len(side.messages) == 1
+    admin_id, text, kw = side.messages[0]
+    assert admin_id == 99 and "ABCDEF1234567890" in text

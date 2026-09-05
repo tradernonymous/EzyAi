@@ -52,6 +52,7 @@ class Bot:
         a.add_handler(CallbackQueryHandler(self.cb_flow, pattern=r"^ezy:"))
         a.add_handler(PreCheckoutQueryHandler(self.on_precheckout))
         a.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, self.on_paid))
+        a.add_handler(MessageHandler(filters.PHOTO, self.on_photo))
         a.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.on_text))
         a.job_queue.run_repeating(self._job, interval=30, first=30)
 
@@ -940,29 +941,36 @@ class Bot:
             user = update.effective_user
             name = (user.full_name if user else f"user {chat_id}") or f"user {chat_id}"
             flow = self._get_flow(ctx)
-        flow.update({"step": "usdt_txid", "usdt_tier": tier,
-                     "usdt_name": name})
-        ctx.user_data[self._flow_key()] = flow
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton(
-            "\u2715 Cancel", callback_data="ezy:cancel")]])
-        await self._edit_or_send(
-            query,
-            "Almost done \u2014 send me the <b>transaction hash (TXID)</b> of your "
-            f"{plan['label']} transfer so the desk can verify it.\n\n"
-            "(It's the long string that starts with a few letters/digits "
-            "on your wallet's transfer confirmation.)",
-            kb)
-        return
+            flow.update({"step": "usdt_proof", "usdt_tier": tier,
+                         "usdt_name": name})
+            ctx.user_data[self._flow_key()] = flow
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton(
+                "\u2715 Cancel", callback_data="ezy:cancel")]])
+            await self._edit_or_send(
+                query,
+                "Almost done \u2014 send a <b>screenshot</b> of your "
+                f"{plan['label']} transfer confirmation so the desk can verify it.\n\n"
+                "(A photo of the wallet \u201csent\u201d screen is perfect. "
+                "You can also just paste the transaction hash as text.)",
+                kb)
+            return
 
         if action in ("admin_ok", "admin_no"):
             admin_id = (self.pay or {}).get("admin_id")
-            if admin_id is None or update.effective_user.id != admin_id:
+            sender = update.effective_user.id if update.effective_user else None
+            logger.info("admin action=%s sender=%s target=%s tier=%s (admin_id=%s)",
+                        action, sender, cb.get("chat"), cb.get("tier"), admin_id)
+            if admin_id is None or sender != admin_id:
+                logger.warning("admin action denied: sender=%s admin_id=%s",
+                               sender, admin_id)
                 await query.answer("Admins only.", show_alert=True)
                 return
             target = cb["chat"]
             if action == "admin_ok":
                 months = constants.PLANS[cb["tier"]]["months"]
                 until = self.service.activate_pro(target, months)
+                logger.info("admin approved PRO %s for %s until %s",
+                            cb["tier"], target, until)
                 import datetime
                 date = datetime.datetime.fromtimestamp(until, datetime.timezone.utc).strftime("%d %b %Y")
                 try:
@@ -992,6 +1000,43 @@ class Bot:
             query, "Let's start over \u2014 pick a flow:",
             ui.help_keyboard())
 
+    async def on_photo(self, update, ctx):
+        """USDT proof by screenshot: forward the photo to the admin desk."""
+        flow = self._get_flow(ctx)
+        if not flow or flow.get("step") != "usdt_proof":
+            return
+        tier = flow.get("usdt_tier")
+        name = flow.get("usdt_name") or "user"
+        ctx.user_data.pop(self._flow_key(), None)
+        plan = billing.tier(tier) if tier else None
+        admin_id = (self.pay or {}).get("admin_id")
+        if not plan or not admin_id:
+            await self._reply(update, "Payment desk offline \u2014 use Stars for instant PRO.")
+            return
+        photos = update.message.photo or []
+        if not photos:
+            return
+        file_id = photos[-1].file_id  # largest size
+        chat_id = update.effective_chat.id
+        try:
+            await ctx.bot.send_photo(
+                admin_id, file_id,
+                caption=(f"\U0001f4b0 USDT claim: <b>{name}</b> (id <code>{chat_id}</code>)\n"
+                         f"claims <b>{plan['label']}</b> \u2014 ${plan['usd']:.2f}\n"
+                         "Proof screenshot below. Approve after checking."),
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        "\u2705 Approve", callback_data=ui.cb_admin_ok(chat_id, tier)),
+                    InlineKeyboardButton(
+                        "\u274c Reject", callback_data=ui.cb_admin_no(chat_id)),
+                ]]))
+            await self._reply(update, "Screenshot received \u2014 an admin verifies "
+                                      "within a few hours. You'll get PRO automatically.")
+        except Exception as exc:
+            logger.warning("usdt photo forward failed: %s", exc)
+            await self._reply(update, "Could not reach the payment desk \u2014 try Stars.")
+
     async def on_text(self, update, ctx):
         text = (update.message.text or "").strip()
         routed = ui.route_menu(text)
@@ -1009,7 +1054,7 @@ class Bot:
                 await self._start_flow(update, ctx, routed)
             return
         flow = ctx.user_data.get(self._flow_key())
-        if flow and flow.get("step") == "usdt_txid":
+        if flow and flow.get("step") == "usdt_proof":
             await self._submit_usdt_claim(update, ctx, text)
             return
         if not flow or flow.get("step") != "custom_pair":
