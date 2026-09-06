@@ -578,10 +578,46 @@ REDEEM_TEXT = {
     "not_found": ("Code not found or already used. Check for typos, or contact "
                   "support with your receipt if you're sure it's right."),
     "already": "That code was already redeemed on this account \u2014 PRO is active.",
+    "expired": "That code has expired. Ask whoever gave it to you for a fresh one.",
+    "used": "That code has already been used up.",
     "error": "Could not reach printezy.money right now \u2014 try again in a minute.",
     "prompt": ("\U0001f39f Paste your PRO code from printezy.money "
                "(looks like <code>EZY-AB12-CD34</code>):"),
 }
+
+
+def gift_code_activated_text(rec, until):
+    import datetime
+    date = datetime.datetime.fromtimestamp(until, datetime.timezone.utc).strftime("%d %b %Y")
+    months = int(rec.get("months", 0))
+    span = "1 month" if months == 1 else f"{months} months"
+    return (f"\U0001f381 <b>PRO activated</b> \u00b7 {span} until {date}.\n"
+            "Gift code accepted \u2014 your watches resume automatically. Enjoy!")
+
+
+def codes_minted_text(codes, tier, uses, days):
+    from .. import constants as _c
+    label = _c.PLANS[tier]["label"]
+    lines = [f"\U0001f39f <b>{len(codes)} gift code(s)</b> \u00b7 {label} \u00b7 "
+             f"{uses} use(s) each \u00b7 valid {days} days"]
+    lines += [f"<code>{c}</code>" for c in codes]
+    lines.append("Customers activate with /redeem CODE.")
+    return "\n".join(lines)
+
+
+def codes_list_text(rows):
+    import datetime
+    if not rows:
+        return "No live gift codes. Mint with /mkcode TIER [COUNT] [USES]."
+    lines = ["<b>Live gift codes</b>"]
+    for code, rec, _live in rows[:40]:
+        exp = datetime.datetime.fromtimestamp(rec.get("expires_at", 0),
+                                              datetime.timezone.utc).strftime("%d %b")
+        lines.append(f"<code>{code}</code> \u00b7 {rec.get('tier')} \u00b7 "
+                     f"{rec.get('uses_left', 0)} left \u00b7 exp {exp}")
+    if len(rows) > 40:
+        lines.append(f"\u2026 and {len(rows) - 40} more")
+    return "\n".join(lines)
 
 
 def plans_text(trial_eligible):

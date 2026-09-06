@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import random
+import secrets
 import shutil
 import threading
 import time
@@ -25,6 +26,12 @@ BACKUP_INTERVAL_S = 600
 FEED_ALERT_AFTER = 5
 # Repeated alerts of the same kind are throttled to one per this window.
 ALERT_THROTTLE_S = 600
+
+
+# Gift-code alphabet: no O/0/I/1 so a code read over the phone survives.
+CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+CODE_DEFAULT_DAYS = 90
+CODE_MAX_BATCH = 50
 
 
 class StateError(RuntimeError):
@@ -54,6 +61,7 @@ class Service:
         self.paid_events = []
         self._paid_set = set()
         self.users = {}  # lowercased telegram username -> chat_id
+        self.codes = {}  # gift codes minted by the admin: code -> record
         self.pro_ids = {int(i) for i in pro_ids}
         self.admin_id = admin_id
         # Best-effort operator notification: callable(text). Set by main.
@@ -242,6 +250,83 @@ class Service:
                 self._try_save()
             return removed
 
+    # -- gift codes (minted by the admin, redeemed with /redeem) --------------
+    @staticmethod
+    def _new_code():
+        body = "".join(secrets.choice(CODE_ALPHABET) for _ in range(8))
+        return f"EZY-{body[:4]}-{body[4:]}"
+
+    def mint_codes(self, tier, count=1, uses=1, days=CODE_DEFAULT_DAYS, created_by=None):
+        """Create gift codes for a plan tier. Each code grants that tier's
+        months `uses` times before it is spent, and expires after `days`."""
+        plan = constants.PLANS.get(tier)
+        if not plan:
+            raise ValueError(f"unknown tier {tier!r}")
+        count = max(1, min(int(count), CODE_MAX_BATCH))
+        uses = max(1, min(int(uses), 1000))
+        now = time.time()
+        with self._lock:
+            out = []
+            while len(out) < count:
+                code = self._new_code()
+                if code in self.codes:
+                    continue
+                self.codes[code] = {
+                    "tier": tier, "months": int(plan["months"]),
+                    "uses_left": uses, "expires_at": now + max(1, int(days)) * 86400,
+                    "created_at": now, "created_by": created_by, "redeemed": [],
+                }
+                out.append(code)
+            self._save()
+            return out
+
+    def redeem_local_code(self, chat_id, code):
+        """(status, until). status: ok, not_found, expired, used, already.
+        A chat can redeem a given code once; the grant is idempotent on
+        (code, chat) so a retry after a save failure never double-grants."""
+        with self._lock:
+            rec = self.codes.get(code)
+            if rec is None or rec.get("revoked"):
+                return "not_found", None
+            cid = int(chat_id)
+            if cid in rec.get("redeemed", []):
+                return "already", self._plan_rec(cid).get("until", 0.0)
+            if rec.get("expires_at", 0) <= time.time():
+                return "expired", None
+            if rec.get("uses_left", 0) <= 0:
+                return "used", None
+            rec["uses_left"] -= 1
+            rec.setdefault("redeemed", []).append(cid)
+            try:
+                until = self.activate_pro(cid, rec["months"], event_id=f"code:{code}:{cid}")
+            except StateError:
+                rec["uses_left"] += 1
+                rec["redeemed"].remove(cid)
+                raise
+            return "ok", until
+
+    def list_codes(self, include_spent=False):
+        now = time.time()
+        with self._lock:
+            rows = []
+            for code, rec in self.codes.items():
+                live = (not rec.get("revoked") and rec.get("uses_left", 0) > 0
+                        and rec.get("expires_at", 0) > now)
+                if live or include_spent:
+                    rows.append((code, dict(rec), live))
+            rows.sort(key=lambda r: r[1].get("created_at", 0), reverse=True)
+            return rows
+
+    def revoke_code(self, code):
+        with self._lock:
+            rec = self.codes.get(code)
+            if rec is None or rec.get("revoked"):
+                return False
+            rec["revoked"] = True
+            rec["uses_left"] = 0
+            self._save()
+            return True
+
     # -- persistence --------------------------------------------------------
     @property
     def backup_path(self):
@@ -336,6 +421,8 @@ class Service:
                 "check_interval_s", 300)
             self.last_check[key] = now - random.uniform(0, interval)
         self.users = users
+        codes = data.get("codes") or {}
+        self.codes = {str(k): v for k, v in codes.items() if isinstance(v, dict)}
         self.plans = plans
         daily = data.get("daily") or {}
         self.daily_counters = daily if isinstance(daily, dict) else {}
@@ -355,6 +442,7 @@ class Service:
             "plans": self.plans,
             "paid_events": self.paid_events[-PAID_EVENTS_MAX:],
             "users": self.users,
+            "codes": self.codes,
         }
 
     def _save(self):

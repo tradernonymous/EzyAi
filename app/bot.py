@@ -97,6 +97,9 @@ class Bot:
         a.add_handler(CommandHandler("account", self.cmd_account))
         a.add_handler(CommandHandler("export", self.cmd_export))
         a.add_handler(CommandHandler("redeem", self.cmd_redeem))
+        a.add_handler(CommandHandler("mkcode", self.cmd_mkcode))
+        a.add_handler(CommandHandler("codes", self.cmd_codes))
+        a.add_handler(CommandHandler("revokecode", self.cmd_revokecode))
         a.add_handler(CallbackQueryHandler(self.cb_flow, pattern=r"^ezy:"))
         a.add_handler(PreCheckoutQueryHandler(self.on_precheckout))
         a.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, self.on_paid))
@@ -380,21 +383,81 @@ class Bot:
     async def _do_redeem(self, update, ctx, text):
         chat_id = update.effective_chat.id
         ctx.user_data.pop(self._flow_key(), None)
-        if not self.site.enabled:
-            await self._reply(update, msg.REDEEM_TEXT["disabled"])
-            return
         if not self._redeem_allowed(chat_id):
             await self._reply(update, "Too many attempts \u2014 try again in an hour, "
                                       "or contact support with your receipt.")
             return
+        code = site_entitlements.normalize_code(text)
+        if code is None:
+            await self._reply(update, msg.REDEEM_TEXT["bad_format"])
+            return
+        # Gift codes minted by the admin live in our own state; the website
+        # is only asked when we have never heard of the code.
+        status, until = self.service.redeem_local_code(chat_id, code)
+        if status == "ok":
+            logger.info("gift code redeemed chat=%s code=%s", chat_id, code)
+            await self._reply(update, msg.gift_code_activated_text(
+                self.service.codes.get(code, {}), until))
+            return
+        if status != "not_found":
+            logger.info("gift code chat=%s status=%s", chat_id, status)
+            await self._reply(update, msg.REDEEM_TEXT[status])
+            return
+        if not self.site.enabled:
+            await self._reply(update, msg.REDEEM_TEXT["not_found"])
+            return
         status, granted = await asyncio.to_thread(
-            site_entitlements.redeem_code, self.site, self.service, chat_id, text)
+            site_entitlements.redeem_code, self.site, self.service, chat_id, code)
         if status == "ok":
             for row, until in granted:
                 await self._reply(update, msg.site_pro_activated_text(row, until))
             return
         logger.info("redeem chat=%s status=%s", chat_id, status)
         await self._reply(update, msg.REDEEM_TEXT.get(status, msg.REDEEM_TEXT["error"]))
+
+    # -- gift codes (admin) --------------------------------------------------
+
+    def _is_admin(self, update):
+        admin_id = (self.pay or {}).get("admin_id")
+        sender = update.effective_user.id if update.effective_user else None
+        return admin_id is not None and sender == admin_id
+
+    async def cmd_mkcode(self, update, ctx):
+        """/mkcode TIER [COUNT] [USES] [DAYS]: mint gift codes."""
+        if not self._is_admin(update):
+            return
+        args = ctx.args or []
+        tier = (args[0] if args else "").lower()
+        if tier not in constants.PLANS:
+            await self._reply(update, "Usage: /mkcode TIER [COUNT] [USES] [DAYS]\n"
+                                      f"TIER: {', '.join(constants.PLAN_ORDER)}")
+            return
+        try:
+            count = int(args[1]) if len(args) > 1 else 1
+            uses = int(args[2]) if len(args) > 2 else 1
+            days = int(args[3]) if len(args) > 3 else 90
+        except ValueError:
+            await self._reply(update, "COUNT, USES and DAYS must be whole numbers.")
+            return
+        codes = self.service.mint_codes(tier, count, uses, days,
+                                        created_by=update.effective_user.id)
+        logger.info("admin minted %d gift codes tier=%s uses=%s", len(codes), tier, uses)
+        await self._reply(update, msg.codes_minted_text(codes, tier, uses, days))
+
+    async def cmd_codes(self, update, ctx):
+        if not self._is_admin(update):
+            return
+        await self._reply(update, msg.codes_list_text(self.service.list_codes()))
+
+    async def cmd_revokecode(self, update, ctx):
+        if not self._is_admin(update):
+            return
+        code = site_entitlements.normalize_code(" ".join(ctx.args or []))
+        if code is None:
+            await self._reply(update, "Usage: /revokecode EZY-XXXX-XXXX")
+            return
+        ok = self.service.revoke_code(code)
+        await self._reply(update, f"Revoked <code>{code}</code>." if ok else "No such live code.")
 
     async def cmd_dashboard(self, update, ctx):
         await self._send_dashboard(update.effective_chat.id, update, ctx)
