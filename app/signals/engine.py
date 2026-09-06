@@ -11,6 +11,10 @@ def evaluate(analysis):
     spec = analysis["spec"]
     if not spec:
         return None
+    # A flat or halted instrument (ATR 0) yields SL == entry == TP: not a
+    # tradeable idea, never alert on it.
+    if abs(spec["market"] - spec["sl"]) <= 0 or abs(spec["tp1"] - spec["market"]) <= 0:
+        return None
 
     gates = constants.SIGNAL_GATES.get(analysis.get("style", "intraday"),
                                          {"conf_gate": constants.CONFIDENCE_GATE})

@@ -132,11 +132,11 @@ def statement_metrics(facts):
         "rev_cagr_3y": cagr(window("revenue", 4)),
         "eps_cagr_3y": cagr([v for v in window("eps", 4)]),
         "ocf_cagr_3y": cagr([v for v in window("ocf", 4)]),
-        "net_margin": (ni / rev) if rev else None,
+        "net_margin": (ni / rev) if (ni is not None and rev) else None,
         "op_margin": (opinc / rev) if (opinc is not None and rev) else None,
         "roe": (ni / eq) if (ni is not None and eq) else None,
         "de_ratio": (debt / eq) if (debt is not None and eq) else None,
         "current_ratio": (ca / cl) if (ca is not None and cl) else None,
-        "net_debt": debt - cash,
+        "net_debt": (debt or 0.0) - (cash or 0.0),
     })
     return out

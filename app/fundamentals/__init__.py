@@ -1,14 +1,17 @@
 import html
 import logging
 import re
+import threading
 import time
 import requests
 
-from .. import constants
+from .. import config, constants
 from . import edgar as edgar_mod
 from . import scoring
 
 logger = logging.getLogger(__name__)
+
+FEED_DOWN_NOTE = "Fundamentals feed temporarily unavailable"
 
 
 class Fundamentals:
@@ -16,28 +19,46 @@ class Fundamentals:
     NEWS = "https://news.google.com/rss/search"
     COT = "https://publicreporting.cftc.gov/resource/6dca-aqww.json"
     HEADERS = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) EzyAiBot/1.0",
+        "User-Agent": "EzyAiBot/1.0 (+https://printezy.money)",
         "Accept": "application/json",
     }
 
     def __init__(self, session=None, timeout=10):
         self.session = session or requests.Session()
-        self.session.headers.update(self.HEADERS)
+        headers = dict(self.HEADERS)
+        # SEC's fair-access policy requires a declared client with a contact
+        # address and blocks browser-spoofing agents.
+        contact = config.contact_email()
+        if contact:
+            headers["User-Agent"] = f"EzyAiBot/1.0 (+https://printezy.money; {contact})"
+        self.session.headers.update(headers)
         self.timeout = timeout
         self._cache = {}
+        self._failed = {}
+        self._lock = threading.Lock()
 
     def _cached(self, key, ttl_s, fn, fail_ttl_s=600):
         now = time.time()
-        hit = self._cache.get(key)
+        with self._lock:
+            hit = self._cache.get(key)
         if hit and now - hit[0] < ttl_s:
             return hit[1]
         try:
             value = fn()
-        except Exception:
-            self._cache[key] = (now - ttl_s + fail_ttl_s, None)
+        except Exception as exc:
+            with self._lock:
+                self._cache[key] = (now - ttl_s + fail_ttl_s, None)
+                self._failed[key] = f"{type(exc).__name__}: {exc}"
             return None
-        self._cache[key] = (now, value)
+        with self._lock:
+            self._cache[key] = (now, value)
+            self._failed.pop(key, None)
         return value
+
+    def last_failure(self, key):
+        """Why the most recent fetch for key failed, or None if it worked."""
+        with self._lock:
+            return self._failed.get(key)
 
     def _get(self, url, params=None):
         r = self.session.get(url, params=params, timeout=self.timeout)
@@ -139,11 +160,11 @@ class Fundamentals:
             "name": symbol,
             "high_52w": max(closes[-252:]),
             "low_52w": min(closes[-252:]),
-            "avg_volume_20": sum(vols[-20:]) / 20,
-            "chg_1w": (closes[-1] / closes[-6] - 1) * 100 if len(closes) >= 6 else 0.0,
-            "chg_1m": (closes[-1] / closes[-22] - 1) * 100 if len(closes) >= 22 else 0.0,
-            "chg_3m": (closes[-1] / closes[-66] - 1) * 100 if len(closes) >= 66 else 0.0,
-            "chg_1y": (closes[-1] / closes[-252] - 1) * 100 if len(closes) >= 252 else 0.0,
+            "avg_volume_20": sum(vols[-20:]) / max(1, len(vols[-20:])),
+            "chg_1w": (closes[-1] / closes[-6] - 1) * 100 if len(closes) >= 6 else None,
+            "chg_1m": (closes[-1] / closes[-22] - 1) * 100 if len(closes) >= 22 else None,
+            "chg_3m": (closes[-1] / closes[-66] - 1) * 100 if len(closes) >= 66 else None,
+            "chg_1y": (closes[-1] / closes[-252] - 1) * 100 if len(closes) >= 250 else None,
             "vol_pct": self._realized_vol(closes),
             "source": "derived from daily candles",
         }
@@ -165,31 +186,46 @@ class Fundamentals:
         return out
 
     def edgar_facts(self, ticker):
-        """Raw SEC company-facts JSON (cached 24h). None for ETFs/unknown."""
+        """Raw SEC company-facts JSON (uncached: multi-MB per filer). None
+        for tickers without a known CIK."""
         cik = constants.SEC_CIK.get(ticker.upper())
         if not cik:
             return None
+        try:
+            r = self.session.get(
+                edgar_mod.EDGAR_FACTS.format(cik=cik), timeout=self.timeout)
+            r.raise_for_status()
+            return r.json()
+        except Exception as exc:
+            logger.warning("EDGAR fetch failed %s: %s %s", ticker,
+                           type(exc).__name__, str(exc)[:120])
+            raise
+
+    def edgar_metrics(self, ticker):
+        """Parsed statement metrics (cached 24h). Only the small extracted
+        dict is kept: caching the raw companyfacts document held several MB
+        per ticker on a 512 MB machine."""
+        if not constants.SEC_CIK.get(ticker.upper()):
+            return None
 
         def fetch():
-            try:
-                r = self.session.get(
-                    edgar_mod.EDGAR_FACTS.format(cik=cik), timeout=self.timeout)
-                r.raise_for_status()
-                return r.json()
-            except Exception as exc:
-                logger.warning("EDGAR fetch failed %s: %s %s", ticker,
-                               type(exc).__name__, str(exc)[:120])
-                raise
+            facts = self.edgar_facts(ticker)
+            return edgar_mod.statement_metrics(facts) if facts else None
 
         return self._cached("edgar:" + ticker.upper(), 86400, fetch)
 
     def stock_statements(self, symbol):
         """Parsed statement metrics + score + DCF. Never raises."""
         try:
-            facts = self.edgar_facts(symbol)
-            if not facts:
+            if not constants.SEC_CIK.get(symbol.upper()):
                 return {"stat_note": "ETF/basket: no 10-K statements"}
-            m = edgar_mod.statement_metrics(facts)
+            m = self.edgar_metrics(symbol)
+            if not m:
+                # A blocked or failed EDGAR call must not be reported as
+                # "this is an ETF" — say the feed is down instead.
+                why = self.last_failure("edgar:" + symbol.upper())
+                return {"stat_note": FEED_DOWN_NOTE,
+                        "stat_error": why or "no statements parsed"}
             derived = self._derived(symbol, constants.KIND_STOCK) or {}
             price = derived.get("price")
             pos = None
@@ -216,8 +252,10 @@ class Fundamentals:
                     "piotroski": fscore,
                     "earn_quality": scoring.earnings_quality(
                         m.get("fcf"), m.get("net_income"))}
-        except Exception:
-            return {}
+        except Exception as exc:
+            logger.warning("stock_statements failed %s: %s: %s", symbol,
+                           type(exc).__name__, exc)
+            return {"stat_note": FEED_DOWN_NOTE, "stat_error": str(exc)[:120]}
 
     @staticmethod
     def _realized_vol(closes, period=252):
@@ -243,10 +281,10 @@ class Fundamentals:
             "price": closes[-1],
             "high_1y": max(closes[-252:]),
             "low_1y": min(closes[-252:]),
-            "chg_1w": (closes[-1] / closes[-6] - 1) * 100 if len(closes) >= 6 else 0.0,
-            "chg_1m": (closes[-1] / closes[-22] - 1) * 100 if len(closes) >= 22 else 0.0,
-            "chg_3m": (closes[-1] / closes[-66] - 1) * 100 if len(closes) >= 66 else 0.0,
-            "chg_1y": (closes[-1] / closes[-252] - 1) * 100 if len(closes) >= 252 else 0.0,
+            "chg_1w": (closes[-1] / closes[-6] - 1) * 100 if len(closes) >= 6 else None,
+            "chg_1m": (closes[-1] / closes[-22] - 1) * 100 if len(closes) >= 22 else None,
+            "chg_3m": (closes[-1] / closes[-66] - 1) * 100 if len(closes) >= 66 else None,
+            "chg_1y": (closes[-1] / closes[-252] - 1) * 100 if len(closes) >= 250 else None,
             "vol_pct": self._realized_vol(closes),
             "source": "derived from daily candles",
         }

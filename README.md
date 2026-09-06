@@ -140,6 +140,23 @@ fly logs
 Then `/start` your bot in Telegram. State (watches/autopilots) is kept on the
 `/data` volume and survives redeploys.
 
+### Operating it reliably
+
+- `GET /` on the app returns `200` only while the background scheduler and the
+  Telegram API check are fresh, and `503` otherwise, so Fly restarts a wedged
+  machine. Tune the threshold with `EZYAI_HEALTH_STALE_S` (default 180 s).
+- The state file is written atomically with `fsync`, and a rolling copy is kept
+  next to it as `state.json.bak`. A corrupt `state.json` is moved aside as
+  `state.json.corrupt-<ts>` and the backup is loaded; if that fails too, the
+  bot starts with saves disabled and alerts the admin rather than overwriting
+  the broken file with empty state.
+- `/export` (admin only) DMs the current state file as an off-box backup.
+- Set `EZYAI_CONTACT_EMAIL` so SEC EDGAR requests carry the contact address its
+  fair-access policy requires; without it fundamentals for stocks may be blocked.
+- The admin (`ADMIN_TELEGRAM_ID`) receives alerts for: state save failures,
+  a feed failing repeatedly for one pair, Stripe fulfilment errors, and
+  unhandled bot errors (throttled).
+
 ## Notes
 
 - Signals are rule-based confluence (EMA alignment, ADX, RSI, MACD,

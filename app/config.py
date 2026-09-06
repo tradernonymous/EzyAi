@@ -85,3 +85,16 @@ def site_url():
 def site_key():
     """Bearer key for the website entitlement API. Empty = feature off."""
     return env("EZYAI_SITE_KEY", "")
+
+
+def contact_email():
+    """Operator contact for upstream APIs that require one (SEC EDGAR)."""
+    return env("EZYAI_CONTACT_EMAIL", "")
+
+
+def health_stale_s():
+    """Seconds without a completed scheduler tick before /health reports 503."""
+    try:
+        return int(env("EZYAI_HEALTH_STALE_S", "180"))
+    except ValueError:
+        return 180

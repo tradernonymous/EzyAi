@@ -145,8 +145,17 @@ def analyze(pair, style, mode, hub, interval=None, sentiment=None):
     base_tf = interval or style_profile["base_tf"]
     direction_tf = style_profile["direction_tf"]
 
-    candles = hub.fetch_klines(pair, base_tf, style_profile["candles"])
-    dir_candles = hub.fetch_klines(pair, direction_tf, style_profile["candles"])
+    fetch_ex = getattr(hub, "fetch_klines_ex", None)
+    if fetch_ex is not None:
+        candles, mode_a = fetch_ex(pair, base_tf, style_profile["candles"])
+        dir_candles, mode_b = fetch_ex(pair, direction_tf, style_profile["candles"])
+        data_mode = "demo" if "demo" in (mode_a, mode_b) else "live"
+    else:  # test stubs and older hubs
+        candles = hub.fetch_klines(pair, base_tf, style_profile["candles"])
+        dir_candles = hub.fetch_klines(pair, direction_tf, style_profile["candles"])
+        data_mode = getattr(hub, "mode", "live")
+    if not candles or not dir_candles:
+        raise ValueError(f"no candles for {pair}")
 
     closes = [c["close"] for c in candles]
     price = closes[-1]
@@ -198,7 +207,8 @@ def analyze(pair, style, mode, hub, interval=None, sentiment=None):
         # impact); confidence points only when CONFLUENCE_SCORING is on,
         # which requires backtest proof (currently off -- see constants).
         scoring = constants.CONFLUENCE_SCORING
-        bias = pat.detect(candles)
+        # Feeds return the still-forming bar last; patterns need closed bars.
+        bias = pat.detect(candles[:-1] if len(candles) > 3 else candles)
         confluence["pattern"] = bias
         if bias != 0:
             name = ("bullish engulfing/hammer" if bias == 1
@@ -288,7 +298,7 @@ def analyze(pair, style, mode, hub, interval=None, sentiment=None):
         "reasons": reasons,
         "exit_notes": exit_notes,
         "hold_horizon": style_profile["hold"],
-        "data_mode": hub.mode,
+        "data_mode": data_mode,
     }
 
 

@@ -1,12 +1,75 @@
+import logging
 import random
+import threading
 import time
 
 from .. import constants
+
+logger = logging.getLogger(__name__)
+
+LIVE = "live"
+DEMO = "demo"
 
 
 def make_candle(ts, o, h, l, c, v):
     return {"ts": ts, "open": float(o), "high": float(h), "low": float(l),
             "close": float(c), "volume": float(v)}
+
+
+def _retry_after(exc):
+    """Seconds an HTTP 429/5xx asks us to wait, or None for other errors."""
+    resp = getattr(exc, "response", None)
+    status = getattr(resp, "status_code", None)
+    if status is None:
+        return None
+    if status == 429 or status >= 500:
+        try:
+            return max(0.5, float(resp.headers.get("Retry-After", 1)))
+        except (TypeError, ValueError):
+            return 1.0
+    return None
+
+
+def with_retry(fn, attempts=3, base_delay=0.6):
+    """Call fn() with exponential backoff and jitter. Honours Retry-After on
+    429/5xx; gives up immediately on other HTTP errors (404, 400) since
+    those never heal by waiting."""
+    last = None
+    for i in range(attempts):
+        try:
+            return fn()
+        except Exception as exc:
+            last = exc
+            wait = _retry_after(exc)
+            resp = getattr(exc, "response", None)
+            status = getattr(resp, "status_code", None)
+            if status is not None and wait is None:
+                raise  # 4xx other than 429: not transient
+            if i == attempts - 1:
+                break
+            delay = wait if wait is not None else base_delay * (2 ** i)
+            time.sleep(min(delay, 8.0) + random.uniform(0, 0.3))
+    raise last
+
+
+def validate_candles(candles, symbol=""):
+    """Normalise a provider's candle list: drop rows with missing prices,
+    sort by time, dedupe timestamps (last wins) and refuse empty results so
+    the indicators never index into nothing."""
+    by_ts = {}
+    for c in candles or []:
+        try:
+            if any(c[k] is None for k in ("open", "high", "low", "close")):
+                continue
+            if c["close"] <= 0 or c["high"] < c["low"]:
+                continue
+            by_ts[int(c["ts"])] = c
+        except (KeyError, TypeError, ValueError):
+            continue
+    out = [by_ts[k] for k in sorted(by_ts)]
+    if not out:
+        raise ValueError(f"no candles returned for {symbol or 'symbol'}")
+    return out
 
 
 class BinanceProvider:
@@ -41,6 +104,11 @@ class BinanceProvider:
                 return r.json()
             except Exception as exc:
                 last_error = exc
+                wait = _retry_after(exc)
+                if wait is not None:
+                    # Hammering the next host immediately after a 429 is how
+                    # a rate limit turns into an IP ban.
+                    time.sleep(min(wait, 3.0))
                 continue
         raise last_error
 
@@ -100,9 +168,11 @@ class YahooProvider:
         self.kind = kind
 
     def _get(self, url, params=None):
-        r = self.session.get(url, params=params, timeout=self.timeout)
-        r.raise_for_status()
-        return r.json()
+        def call():
+            r = self.session.get(url, params=params, timeout=self.timeout)
+            r.raise_for_status()
+            return r.json()
+        return with_retry(call, attempts=3)
 
     def resolve_symbol(self, symbol):
         if self.kind == constants.KIND_FOREX:
@@ -184,8 +254,12 @@ class CcxtProvider:
 
     EXCHANGES = ("kraken", "coinbase")
 
+    MARKETS_TTL = 3600
+
     def __init__(self, timeout=10):
         self.timeout = timeout
+        self._exchanges = {}  # name -> (exchange, markets_loaded_at)
+        self._lock = threading.Lock()
 
     @staticmethod
     def to_ccxt_symbol(symbol):
@@ -203,8 +277,8 @@ class CcxtProvider:
         ccxt_symbol = self.to_ccxt_symbol(symbol)
         for name in self.EXCHANGES:
             try:
-                ex = self._exchange(ccxt, name)
-                if ccxt_symbol not in ex.load_markets():
+                ex, markets = self._markets(ccxt, name)
+                if ccxt_symbol not in markets:
                     continue
                 if op == "ohlcv":
                     return ex.fetch_ohlcv(ccxt_symbol, timeframe=interval,
@@ -215,6 +289,18 @@ class CcxtProvider:
                 continue
         raise last_error if last_error else ValueError(
             f"No ccxt market: {symbol}")
+
+    def _markets(self, ccxt_mod, name):
+        """Exchange instance with markets loaded, reused for an hour. Loading
+        the full market catalogue on every fallback call was a multi-MB
+        download per tick during a Binance outage."""
+        with self._lock:
+            ex, markets, loaded = self._exchanges.get(name, (None, None, 0.0))
+            if ex is None or time.time() - loaded > self.MARKETS_TTL:
+                ex = self._exchange(ccxt_mod, name)
+                markets = ex.load_markets() or {}
+                self._exchanges[name] = (ex, markets, time.time())
+            return ex, markets
 
     def fetch_klines(self, symbol, interval, limit=200):
         raw = self._try_each("ohlcv", symbol, interval, limit)
@@ -311,7 +397,12 @@ class DataHub:
         self.cfd = YahooProvider(kind=constants.KIND_CFD)
         self.demo = SyntheticProvider(constants.ALL_UNIVERSE)
         self.allow_demo = allow_demo
-        self.mode = "live"
+        # Mode of the most recent fetch, for the dashboard's feed label only.
+        # Per-request callers must use fetch_klines_ex / tick["mode"], since
+        # this attribute is shared by every concurrent user.
+        self.mode = LIVE
+        self._cache = {}
+        self._cache_lock = threading.Lock()
 
     @staticmethod
     def classify(symbol):
@@ -339,10 +430,15 @@ class DataHub:
         return None, None
 
     def resolve_loose(self, symbol):
+        """(kind, venue_symbol) for known or discoverable symbols, else None.
+        Discovery does live lookups (Binance exchangeInfo, Yahoo) and must
+        be called off the event loop."""
         kind, sym = self.resolve(symbol)
         if kind:
             return kind, sym
         s = symbol.upper()
+        if not s or len(s) > 24 or not s.replace("=", "").replace("-", "").isalnum():
+            return None
         # friendly USD spelling for listings outside the universe
         if s.endswith("USD") and not s.endswith(("USDT", "USDC")):
             venue = constants.binance_symbol(s)
@@ -363,7 +459,7 @@ class DataHub:
             pass
         if self.allow_demo:
             return constants.KIND_CRYPTO, symbol.upper()
-        return None, None
+        return None
 
     def partner(self, symbol):
         kind, sym = self.resolve(symbol)
@@ -380,11 +476,38 @@ class DataHub:
         elif kind == constants.KIND_STOCK:
             return self.stock
         if self.allow_demo:
-            self.mode = "demo"
+            self.mode = DEMO
             return self.demo
         raise ValueError(f"Unknown symbol: {symbol}")
 
-    def fetch_klines(self, symbol, interval, limit=200):
+    @staticmethod
+    def _cache_ttl(interval):
+        # Ten users watching the same pair must not mean ten identical
+        # upstream calls per tick. Short bars stay fresh, daily bars longer.
+        secs = constants.INTERVALS.get(interval, 300)
+        return max(15.0, min(secs / 4.0, 600.0))
+
+    def _cache_get(self, key, ttl):
+        with self._cache_lock:
+            hit = self._cache.get(key)
+        if hit and time.time() - hit[0] < ttl:
+            return hit[1]
+        return None
+
+    def _cache_put(self, key, value):
+        with self._cache_lock:
+            self._cache[key] = (time.time(), value)
+            if len(self._cache) > 512:
+                oldest = sorted(self._cache.items(), key=lambda kv: kv[1][0])
+                for k, _ in oldest[:128]:
+                    del self._cache[k]
+
+    def fetch_klines_ex(self, symbol, interval, limit=200):
+        """(candles, mode) where mode is LIVE or DEMO for this very fetch."""
+        key = ("k", symbol.upper(), interval, limit)
+        hit = self._cache_get(key, self._cache_ttl(interval))
+        if hit is not None:
+            return hit
         kind, sym = self.resolve(symbol)
         try:
             partner = self.partner(symbol)
@@ -393,25 +516,34 @@ class DataHub:
         last_error = None
         if partner is not None:
             try:
-                candles = partner.fetch_klines(sym, interval, limit)
-                if partner is not self.demo:
-                    self.mode = "live"
-                return candles
+                candles = validate_candles(partner.fetch_klines(sym, interval, limit), sym)
+                mode = DEMO if partner is self.demo else LIVE
+                self.mode = mode
+                self._cache_put(key, (candles, mode))
+                return candles, mode
             except Exception as exc:
                 last_error = exc
+                logger.warning("klines %s %s via %s failed: %s: %s", sym, interval,
+                               type(partner).__name__, type(exc).__name__, exc)
         if kind == constants.KIND_CRYPTO:
             try:
-                candles = self.ccxt.fetch_klines(sym, interval, limit)
-                self.mode = "live"
-                return candles
-            except Exception:
-                pass
+                candles = validate_candles(self.ccxt.fetch_klines(sym, interval, limit), sym)
+                self.mode = LIVE
+                self._cache_put(key, (candles, LIVE))
+                return candles, LIVE
+            except Exception as exc:
+                last_error = last_error or exc
+                logger.warning("klines %s %s via ccxt failed: %s: %s", sym, interval,
+                               type(exc).__name__, exc)
         if self.allow_demo:
-            self.mode = "demo"
-            return self.demo.fetch_klines(sym, interval, limit)
+            self.mode = DEMO
+            return self.demo.fetch_klines(sym, interval, limit), DEMO
         if partner is None:
             raise ValueError(f"Unknown symbol: {symbol}")
         raise last_error
+
+    def fetch_klines(self, symbol, interval, limit=200):
+        return self.fetch_klines_ex(symbol, interval, limit)[0]
 
     def fetch_ticker(self, symbol):
         kind, sym = self.resolve(symbol)
@@ -423,25 +555,29 @@ class DataHub:
         if partner is not None:
             try:
                 tick = partner.fetch_ticker(sym)
-                if partner is not self.demo:
-                    self.mode = "live"
-                else:
-                    self.mode = "demo"
+                tick["mode"] = DEMO if partner is self.demo else LIVE
+                self.mode = tick["mode"]
                 tick["symbol"] = symbol.upper()
                 return tick
             except Exception as exc:
                 last_error = exc
+                logger.warning("ticker %s via %s failed: %s: %s", sym,
+                               type(partner).__name__, type(exc).__name__, exc)
         if kind == constants.KIND_CRYPTO:
             try:
                 tick = self.ccxt.fetch_ticker(sym)
-                self.mode = "live"
+                tick["mode"] = LIVE
+                self.mode = LIVE
                 tick["symbol"] = symbol.upper()
                 return tick
-            except Exception:
-                pass
+            except Exception as exc:
+                last_error = last_error or exc
+                logger.warning("ticker %s via ccxt failed: %s: %s", sym,
+                               type(exc).__name__, exc)
         if self.allow_demo:
-            self.mode = "demo"
+            self.mode = DEMO
             tick = self.demo.fetch_ticker(sym)
+            tick["mode"] = DEMO
             tick["symbol"] = symbol.upper()
             return tick
         if partner is None:

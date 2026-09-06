@@ -76,9 +76,12 @@ class SiteClient:
 
 def _valid(row):
     try:
-        return (isinstance(row, dict) and row.get("id") and row.get("stripe_session_id")
-                and int(row.get("months", 0)) > 0)
-    except (TypeError, ValueError):
+        from . import constants
+        months = int(row.get("months", 0)) if isinstance(row, dict) else 0
+        return bool(isinstance(row, dict) and row.get("id")
+                    and row.get("stripe_session_id")
+                    and 0 < months <= constants.MAX_PLAN_MONTHS)
+    except (TypeError, ValueError, AttributeError):
         return False
 
 
