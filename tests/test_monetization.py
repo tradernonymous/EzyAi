@@ -399,3 +399,32 @@ def test_usdt_txid_text_still_accepted(tmp_path):
     assert len(side.messages) == 1
     admin_id, text, kw = side.messages[0]
     assert admin_id == 99 and "ABCDEF1234567890" in text
+
+
+def test_discount_helpers_and_session_coupon():
+    assert billing.discounted_usd(14.99, 20) == 11.99
+    assert billing.discounted_usd(14.99, 0) == 14.99
+    assert billing.discounted_stars(750, 20) == 600
+    assert billing.discounted_stars(1, 90) == 1  # Telegram floor
+    p = billing.stripe_session_params("1mo", 1, "s", "c", percent=20)
+    assert p["discounts"] == [{"coupon": "ezyai_off_20"}]
+    assert "allow_promotion_codes" not in p  # Stripe forbids both together
+    assert p["line_items"][0]["price_data"]["unit_amount"] == 1499  # coupon applies server-side
+
+
+def test_fulfilment_consumes_discount(tmp_path):
+    svc = Service(object(), tmp_path / "state.json")
+    svc.set_discount(42, "EZY-AAAA-BBBB", 20, time.time() + 3600)
+    session = {"payment_status": "paid",
+               "metadata": {"order": billing.encode_payload("1mo", "card", 42)}}
+    assert billing.fulfill_checkout_session(session, svc, event_id="evt_d")[0] == 42
+    assert svc.discount_for(42) is None
+
+
+def test_plans_copy_uses_trial_days_and_discount():
+    t = msg.plans_text(True, 7, {"percent": 20, "code": "EZY-AAAA-BBBB"})
+    assert "7-day free trial" in t and "20% off" in t and "$11.99" in t
+    assert "PRO feature" in msg.pro_gate("Watch", True, 10) and "10-day" in msg.pro_gate("Watch", True, 10)
+    kb = ui.plans_keyboard(True, 7, 20)
+    texts = [b.text for row in kb.inline_keyboard for b in row]
+    assert any("7-day" in x for x in texts) and any("$11.99" in x for x in texts)
