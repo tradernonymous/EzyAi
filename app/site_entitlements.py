@@ -7,16 +7,29 @@ posts the claim back so the row is never handed out twice.
 
 Endpoint contract (see src/routes/api/public/ezyai/entitlements.ts):
   GET  {site}/api/public/ezyai/entitlements?username=<handle>  -> {entitlements: [...]}
+  GET  {site}/api/public/ezyai/entitlements?code=<redeem_code> -> {entitlements: [row]}
   GET  {site}/api/public/ezyai/entitlements                    -> all unclaimed (sweep)
   POST {site}/api/public/ezyai/entitlements  {id, telegram_id} -> {claimed: bool}
-Each row: {id, sku, months, telegram_username, stripe_session_id, ...}.
+Each row: {id, sku, months, telegram_username, stripe_session_id, redeem_code, ...}.
+
+Redeem codes are the safe path. A Telegram username can change hands, so a
+purchase keyed only on a handle can be claimed by whoever holds the handle
+when the bot looks. The website should show the buyer a one-time code
+(format EZY-XXXX-XXXX, unambiguous uppercase letters and digits) on the
+success page and in the receipt email; the buyer types /redeem CODE in the
+bot. The username sweep stays available for compatibility and can be turned
+off with EZYAI_SITE_USERNAME_MATCH=false once the site issues codes.
 """
 
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
 PATH = "/api/public/ezyai/entitlements"
+
+# EZY-XXXX-XXXX (2 to 3 groups); O/0 and I/1 are folded by normalize_code.
+_CODE_RE = re.compile(r"^(?:EZY-)?[A-Z0-9]{4}(?:-[A-Z0-9]{4}){1,2}$")
 
 
 def normalize_handle(username):
@@ -24,6 +37,20 @@ def normalize_handle(username):
         return None
     handle = str(username).strip().lstrip("@").lower()
     return handle or None
+
+
+def normalize_code(text):
+    """Canonical redeem code or None. Tolerates spaces, lowercase, missing
+    dashes and the usual O/0, I/1 confusions."""
+    raw = re.sub(r"[\s_]", "", str(text or "")).upper().replace("O", "0").replace("I", "1")
+    if not raw:
+        return None
+    body = raw[4:] if raw.startswith("EZY-") else (raw[3:] if raw.startswith("EZY") else raw)
+    body = body.replace("-", "")
+    if not (8 <= len(body) <= 12) or len(body) % 4 or not body.isalnum():
+        return None
+    code = "EZY-" + "-".join(body[i:i + 4] for i in range(0, len(body), 4))
+    return code if _CODE_RE.match(code) else None
 
 
 def event_id_for(row):
@@ -59,6 +86,19 @@ class SiteClient:
             params["username"] = handle
         resp = requests.get(self.base_url + PATH, params=params,
                             headers=self._headers(), timeout=self.timeout)
+        resp.raise_for_status()
+        rows = (resp.json() or {}).get("entitlements") or []
+        return [r for r in rows if _valid(r)]
+
+    def fetch_by_code(self, code):
+        """Unclaimed row(s) for a redeem code; [] when unknown or claimed."""
+        if not self.enabled or not code:
+            return []
+        import requests
+        resp = requests.get(self.base_url + PATH, params={"code": code},
+                            headers=self._headers(), timeout=self.timeout)
+        if resp.status_code == 404:
+            return []
         resp.raise_for_status()
         rows = (resp.json() or {}).get("entitlements") or []
         return [r for r in rows if _valid(r)]
@@ -119,6 +159,28 @@ def redeem_for_user(client, service, chat_id, username):
         logger.warning("site entitlement fetch failed handle=%s: %s", handle, exc)
         return []
     return redeem(client, service, chat_id, rows)
+
+
+def redeem_code(client, service, chat_id, text):
+    """/redeem CODE. Returns (status, granted) with status one of
+    "disabled", "bad_format", "not_found", "already", "ok", "error"."""
+    if not client.enabled:
+        return "disabled", []
+    code = normalize_code(text)
+    if not code:
+        return "bad_format", []
+    try:
+        rows = client.fetch_by_code(code)
+    except Exception as exc:
+        logger.warning("redeem code lookup failed: %s", exc)
+        return "error", []
+    if not rows:
+        return "not_found", []
+    if all(service.already_processed(event_id_for(r)) for r in rows):
+        return "already", []
+    granted = redeem(client, service, chat_id, rows)
+    logger.info("redeem code accepted chat=%s rows=%d", chat_id, len(granted))
+    return ("ok" if granted else "already"), granted
 
 
 def sweep(client, service):

@@ -17,6 +17,9 @@ primary_region = 'ams'
 [[mounts]]
   source = 'ezyai_state'
   destination = '/data'
+  # Fly keeps daily volume snapshots; two weeks covers a late-noticed
+  # state problem. Restore with `fly volumes snapshots list/create`.
+  snapshot_retention = 14
 
 [http_service]
   internal_port = 8080

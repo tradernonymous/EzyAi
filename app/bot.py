@@ -55,6 +55,10 @@ class Bot:
             self.pay.get("site_url"), self.pay.get("site_key"))
         self._sweep_tick = 0
         self._buckets = {}  # chat_id -> deque of recent command timestamps
+        self._redeem_attempts = {}  # chat_id -> deque of redeem attempt times
+        # Claiming website purchases by Telegram handle is legacy: handles
+        # change owners. Off once the site issues redeem codes.
+        self.username_match = bool(self.pay.get("site_username_match", True))
         self._error_alert_ts = 0.0
         builder = (Application.builder().token(token)
                    # Handlers run concurrently so one slow feed never blocks
@@ -92,6 +96,7 @@ class Bot:
         a.add_handler(CommandHandler("plans", self.cmd_plans))
         a.add_handler(CommandHandler("account", self.cmd_account))
         a.add_handler(CommandHandler("export", self.cmd_export))
+        a.add_handler(CommandHandler("redeem", self.cmd_redeem))
         a.add_handler(CallbackQueryHandler(self.cb_flow, pattern=r"^ezy:"))
         a.add_handler(PreCheckoutQueryHandler(self.on_precheckout))
         a.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, self.on_paid))
@@ -152,7 +157,7 @@ class Bot:
                 health.beat("telegram")
             except Exception as exc:
                 logger.warning("telegram api check failed: %s", exc)
-        if self.site.enabled and self._sweep_tick % 4 == 0:
+        if self.site.enabled and self.username_match and self._sweep_tick % 4 == 0:
             try:
                 granted = await asyncio.to_thread(
                     site_entitlements.sweep, self.site, self.service)
@@ -329,7 +334,7 @@ class Bot:
     async def _redeem_site(self, update):
         """Claim PRO bought on the website for this user's handle. Returns
         True when new PRO time was granted (and the user was told)."""
-        if not self.site.enabled:
+        if not self.site.enabled or not self.username_match:
             return False
         user = update.effective_user
         chat_id = update.effective_chat.id
@@ -348,6 +353,48 @@ class Bot:
     async def cmd_help(self, update, ctx):
         await self._reply(update, msg.help_text(),
                           reply_markup=ui.help_keyboard())
+
+    # -- redeem codes (website purchases) -----------------------------------
+
+    async def cmd_redeem(self, update, ctx):
+        if ctx.args:
+            await self._do_redeem(update, ctx, " ".join(ctx.args))
+            return
+        ctx.user_data[self._flow_key()] = {"flow": "redeem", "step": "redeem_code"}
+        await self._reply(update, msg.REDEEM_TEXT["prompt"],
+                          reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
+                              "\u2715 Cancel", callback_data="ezy:cancel")]]))
+
+    def _redeem_allowed(self, chat_id, now=None):
+        """At most 5 attempts per hour per chat: codes are short enough that
+        an unbounded guesser would eventually hit one."""
+        now = now or time.time()
+        q = self._redeem_attempts.setdefault(chat_id, deque())
+        while q and now - q[0] > 3600:
+            q.popleft()
+        if len(q) >= 5:
+            return False
+        q.append(now)
+        return True
+
+    async def _do_redeem(self, update, ctx, text):
+        chat_id = update.effective_chat.id
+        ctx.user_data.pop(self._flow_key(), None)
+        if not self.site.enabled:
+            await self._reply(update, msg.REDEEM_TEXT["disabled"])
+            return
+        if not self._redeem_allowed(chat_id):
+            await self._reply(update, "Too many attempts \u2014 try again in an hour, "
+                                      "or contact support with your receipt.")
+            return
+        status, granted = await asyncio.to_thread(
+            site_entitlements.redeem_code, self.site, self.service, chat_id, text)
+        if status == "ok":
+            for row, until in granted:
+                await self._reply(update, msg.site_pro_activated_text(row, until))
+            return
+        logger.info("redeem chat=%s status=%s", chat_id, status)
+        await self._reply(update, msg.REDEEM_TEXT.get(status, msg.REDEEM_TEXT["error"]))
 
     async def cmd_dashboard(self, update, ctx):
         await self._send_dashboard(update.effective_chat.id, update, ctx)
@@ -1322,6 +1369,9 @@ class Bot:
         flow = ctx.user_data.get(self._flow_key())
         if flow and flow.get("step") == "usdt_proof":
             await self._submit_usdt_claim(update, ctx, text)
+            return
+        if flow and flow.get("step") == "redeem_code":
+            await self._do_redeem(update, ctx, text)
             return
         if not flow or flow.get("step") != "custom_pair":
             return

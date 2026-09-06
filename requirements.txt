@@ -4,3 +4,5 @@ requests>=2.32
 ccxt>=4.5
 # Native Stripe card checkout (Checkout Sessions + webhooks; lazily imported).
 stripe>=15.0
+# Optional error reporting; active only when SENTRY_DSN is set.
+sentry-sdk>=2.0
