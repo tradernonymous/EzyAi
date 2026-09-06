@@ -62,8 +62,16 @@ def session_state(kind, ts_ms):
     if dt.weekday() >= 5:
         return "closed"  # stocks/FX/CFD venues shut or stale on weekends
     if kind == "stock":
-        mins = dt.hour * 60 + dt.minute
-        if not (13 * 60 + 30 <= mins <= 20 * 60 + 5):
+        # US cash session 09:30-16:05 New York time; the fixed UTC window
+        # used before was an hour off for the five months of standard time.
+        try:
+            from zoneinfo import ZoneInfo
+            ny = dt.astimezone(ZoneInfo("America/New_York"))
+        except Exception:  # no tz database: fall back to summer-time UTC
+            mins = dt.hour * 60 + dt.minute
+            return "open" if 13 * 60 + 30 <= mins <= 20 * 60 + 5 else "thin"
+        mins = ny.hour * 60 + ny.minute
+        if not (9 * 60 + 30 <= mins <= 16 * 60 + 5):
             return "thin"  # outside US cash session
         return "open"
     if kind in ("forex", "cfd"):

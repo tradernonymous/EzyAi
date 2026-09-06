@@ -25,6 +25,13 @@ def _arrow(direction):
     return {"up": "\u2191", "down": "\u2193"}.get(direction, "\u2194")
 
 
+def pct(v, digits=1):
+    """Signed percentage or n/a when the window was not available."""
+    if v is None:
+        return "n/a"
+    return f"{v:+.{digits}f}%"
+
+
 def analysis_report(a):
     e = escape
     lines = []
@@ -117,6 +124,7 @@ def quote_report(pair, tick):
     if bar:
         lines.append(f"Day range: {price(tick['low'])} {bar} {price(tick['high'])}")
     lines.append(f"Volume: {tick['volume']:,.0f} ({tick['quote']}) \u00b7 Data: {tick.get('mode', 'live')}")
+    lines.append("\u26a0\ufe0f Indicative price, not financial advice.")
     return "\n".join(lines)
 
 
@@ -344,15 +352,17 @@ def fundamentals_report(kind, symbol, data, hub_mode, pro=True):
             lines.append(f"Price: <b>{price(data['price'])}</b> \u00b7 "
                          f"52w range {price(data.get('low_52w'))} \u2013 {price(data.get('high_52w'))}")
             lines.append(f"Avg volume (20d): {data.get('avg_volume_20', 0):,.0f}")
-            lines.append(f"Move: 1w {data.get('chg_1w', 0):+.1f}% \u00b7 1m {data.get('chg_1m', 0):+.1f}% \u00b7 "
-                         f"3m {data.get('chg_3m', 0):+.1f}% \u00b7 1y {data.get('chg_1y', 0):+.1f}%")
+            lines.append(f"Move: 1w {pct(data.get('chg_1w'))} \u00b7 1m {pct(data.get('chg_1m'))} \u00b7 "
+                         f"3m {pct(data.get('chg_3m'))} \u00b7 1y {pct(data.get('chg_1y'))}")
             lines.append(f"Realized volatility (annualized): {data.get('vol_pct', 0):.0f}%")
             if data.get("marketCap"):
                 lines.append(f"Market cap: ${data['marketCap']/1e9:,.2f}B")
             if data.get("trailingPE"):
                 lines.append(f"P/E (trailing): {data['trailingPE']:.1f}")
             if data.get("stat_note"):
-                lines.append(f"\U0001f4ca {e(data['stat_note'])} (price momentum only).")
+                suffix = " (price momentum only)" if "ETF" in data["stat_note"] else \
+                    " \u2014 statement scores hidden until it recovers"
+                lines.append(f"\U0001f4ca {e(data['stat_note'])}{suffix}.")
             if pro and data.get("fscore") is not None:
                 lines.append("")
                 ent = f" \u00b7 {e(data['stat_entity'])}" if data.get("stat_entity") else ""
@@ -397,8 +407,8 @@ def fundamentals_report(kind, symbol, data, hub_mode, pro=True):
             lines.append(f"Market {e(symbol)} \u00b7 Data: {e(data.get('source', 'derived'))}")
             lines.append(f"Price: <b>{price(data['price'])}</b> \u00b7 "
                          f"1y range {price(data.get('low_1y'))} \u2013 {price(data.get('high_1y'))}")
-            lines.append(f"Move: 1w {data.get('chg_1w', 0):+.2f}% \u00b7 1m {data.get('chg_1m', 0):+.2f}% \u00b7 "
-                         f"3m {data.get('chg_3m', 0):+.2f}% \u00b7 1y {data.get('chg_1y', 0):+.2f}%")
+            lines.append(f"Move: 1w {pct(data.get('chg_1w'), 2)} \u00b7 1m {pct(data.get('chg_1m'), 2)} \u00b7 "
+                         f"3m {pct(data.get('chg_3m'), 2)} \u00b7 1y {pct(data.get('chg_1y'), 2)}")
             lines.append(f"Realized volatility (annualized): {data.get('vol_pct', 0):.0f}%")
             cot = data.get("cot")
             if pro and cot:
@@ -416,8 +426,8 @@ def fundamentals_report(kind, symbol, data, hub_mode, pro=True):
             lines.append(f"Pair {e(symbol)} \u00b7 Data: {e(data.get('source','derived'))}")
             lines.append(f"Price: <b>{price(data['price'])}</b> \u00b7 "
                          f"1y range {price(data.get('low_1y'))} \u2013 {price(data.get('high_1y'))}")
-            lines.append(f"Move: 1w {data.get('chg_1w', 0):+.2f}% \u00b7 1m {data.get('chg_1m', 0):+.2f}% \u00b7 "
-                         f"3m {data.get('chg_3m', 0):+.2f}% \u00b7 1y {data.get('chg_1y', 0):+.2f}%")
+            lines.append(f"Move: 1w {pct(data.get('chg_1w'), 2)} \u00b7 1m {pct(data.get('chg_1m'), 2)} \u00b7 "
+                         f"3m {pct(data.get('chg_3m'), 2)} \u00b7 1y {pct(data.get('chg_1y'), 2)}")
             lines.append(f"Realized volatility (annualized): {data.get('vol_pct', 0):.0f}%")
             v = data.get("verdict")
             if pro and v and v.get("base"):
@@ -573,6 +583,9 @@ def plans_text(trial_eligible):
     else:
         lines.append("Trial already used on this account.")
     lines.append("Pay with Stars \u26a1, card \U0001f4b3, or USDT \u20ae.")
+    lines.append("One-off payments \u2014 nothing auto-renews. Stars purchases "
+                 "follow Telegram's refund rules; card payments are handled by "
+                 "Stripe. Questions: /account.")
     return "\n".join(lines)
 
 
@@ -647,6 +660,11 @@ def confirm_auto_text(style, mode, daily_limit):
     )
 
 
+def watch_cap_text(limit):
+    return (f"\U0001f6d1 You already watch {limit} pairs \u2014 that's the cap per "
+            "account so alerts stay useful. Remove one below to add another.")
+
+
 def watch_added_text(pair, style, mode):
     return (f"\u2705 <b>Watch live:</b> {pair} \u00b7 {style}/{mode}\n"
             "You will get a signal the moment a setup passes your risk rules.")
@@ -687,5 +705,7 @@ def help_text():
         "/dashboard \u2014 everything at a glance\n"
         "/help \u2014 this message\n\n"
         "Examples: crypto BTCUSD \u00b7 forex EURUSD \u00b7 stock AAPL \u00b7 cfd XAUUSD\n"
-        "Modes affect frequency and risk: safe (fewer, tighter), aggressive (more, wider)."
+        "Modes affect frequency and risk: safe (fewer, tighter), aggressive (more, wider).\n\n"
+        "\u26a0\ufe0f Educational research only \u2014 not financial advice. "
+        "Autopilot daily limits reset at midnight UTC."
     )

@@ -26,6 +26,8 @@ Callback scheme (all prefixed ``ezy:``, <=64 bytes):
   ezy:admin_no:<chat>        admin rejects USDT (admin only)
 """
 
+from html import escape
+
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from . import constants
@@ -337,10 +339,10 @@ def prompt_pair(flow):
 
 
 def prompt_style(flow, pair):
-    return (f"{FLOW_TITLE[flow]} \u2014 step 2/3\n<b>{pair}</b>: pick a style:",
+    return (f"{FLOW_TITLE[flow]} \u2014 step 2/3\n<b>{escape(pair)}</b>: pick a style:",
             style_keyboard(flow))
 
 
 def prompt_mode(flow, pair, style):
-    return (f"{FLOW_TITLE[flow]} \u2014 step 3/3\n<b>{pair}</b> \u00b7 {style}: pick risk mode:",
+    return (f"{FLOW_TITLE[flow]} \u2014 step 3/3\n<b>{escape(pair)}</b> \u00b7 {escape(style)}: pick risk mode:",
             mode_keyboard(flow))

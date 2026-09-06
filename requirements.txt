@@ -1,4 +1,4 @@
-python-telegram-bot[job-queue]>=21.6
+python-telegram-bot[job-queue,rate-limiter]>=21.6
 requests>=2.32
 # Public-only crypto fallback behind Binance (no API key; lazily imported).
 ccxt>=4.5

@@ -26,7 +26,11 @@ def cluster(levels, tolerance_pct=0.15):
     current = [ordered[0]]
     for x in ordered[1:]:
         base = sum(current) / len(current)
-        if abs(x - base) / base * 100 <= tolerance_pct:
+        if base == 0:
+            clusters.append(base)
+            current = [x]
+            continue
+        if abs(x - base) / abs(base) * 100 <= tolerance_pct:
             current.append(x)
         else:
             clusters.append(sum(current) / len(current))

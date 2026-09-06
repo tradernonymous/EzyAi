@@ -1,10 +1,17 @@
 import asyncio
+import io
 import logging
+import time
+from collections import deque
+from html import escape
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, Update
 from telegram.constants import ParseMode
+from telegram.error import BadRequest, Forbidden, RetryAfter, TelegramError
 from telegram.ext import (
+    AIORateLimiter,
     Application,
+    ApplicationHandlerStop,
     CallbackQueryHandler,
     CommandHandler,
     MessageHandler,
@@ -14,6 +21,7 @@ from telegram.ext import (
 )
 
 from . import billing
+from . import health
 from . import site_entitlements
 from . import constants
 from . import ui
@@ -21,8 +29,19 @@ from .analysis import sentiment as _sent
 from .formatting import message as msg
 from .fundamentals import Fundamentals
 from .signals import engine as signal_engine
+from .signals.scheduler import StateError
 
 logger = logging.getLogger(__name__)
+
+# Telegram messages are capped at 4096 characters.
+TG_MAX_LEN = 4096
+# How often the job checks the Telegram API itself (in 30 s ticks).
+TELEGRAM_CHECK_EVERY = 10
+
+
+def _fmt_date(ts):
+    import datetime
+    return datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).strftime("%d %b %Y")
 
 
 class Bot:
@@ -35,7 +54,21 @@ class Bot:
         self.site = site_entitlements.SiteClient(
             self.pay.get("site_url"), self.pay.get("site_key"))
         self._sweep_tick = 0
-        self.app = Application.builder().token(token).build()
+        self._buckets = {}  # chat_id -> deque of recent command timestamps
+        self._error_alert_ts = 0.0
+        builder = (Application.builder().token(token)
+                   # Handlers run concurrently so one slow feed never blocks
+                   # other users' replies; Service is lock-protected.
+                   .concurrent_updates(64)
+                   .connect_timeout(10).read_timeout(20)
+                   .write_timeout(20).pool_timeout(10))
+        try:
+            # Queues outbound calls under Telegram's flood limits instead of
+            # dropping a paid user's alert with RetryAfter.
+            builder = builder.rate_limiter(AIORateLimiter())
+        except RuntimeError as exc:  # optional extra not installed
+            logger.warning("rate limiter unavailable: %s", exc)
+        self.app = builder.build()
         self._register()
 
     def _register(self):
@@ -43,7 +76,8 @@ class Bot:
         a.post_init = self.post_init_hook
         # group -1 runs before every handler: remember handle -> chat id so
         # website PRO purchases (typed by username) can be matched later.
-        a.add_handler(TypeHandler(Update, self._remember_user), group=-1)
+        a.add_handler(TypeHandler(Update, self._pre_update), group=-1)
+        a.add_error_handler(self.on_error)
         a.add_handler(CommandHandler("start", self.cmd_start))
         a.add_handler(CommandHandler("help", self.cmd_help))
         a.add_handler(CommandHandler("dashboard", self.cmd_dashboard))
@@ -57,6 +91,7 @@ class Bot:
         a.add_handler(CommandHandler("quote", self.cmd_quote))
         a.add_handler(CommandHandler("plans", self.cmd_plans))
         a.add_handler(CommandHandler("account", self.cmd_account))
+        a.add_handler(CommandHandler("export", self.cmd_export))
         a.add_handler(CallbackQueryHandler(self.cb_flow, pattern=r"^ezy:"))
         a.add_handler(PreCheckoutQueryHandler(self.on_precheckout))
         a.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, self.on_paid))
@@ -72,37 +107,117 @@ class Bot:
         except Exception as exc:
             logger.warning("set_my_commands failed: %s", exc)
 
-    async def _job(self, context):
-        async def send(chat_id, signal, source="watch"):
-            text = msg.signal_message(signal, source=source)
+    async def _send_safe(self, chat_id, text, **kw):
+        """Deliver a background message to one chat. A blocked bot removes
+        that chat's watches; a flood wait is honoured once; any other failure
+        is logged and never stops the caller's loop. Returns True on send."""
+        kw.setdefault("parse_mode", ParseMode.HTML)
+        for attempt in (1, 2):
             try:
-                await self.app.bot.send_message(
-                    chat_id, text, parse_mode=ParseMode.HTML,
-                    reply_markup=ui.followup_keyboard(signal["pair"]))
+                await self.app.bot.send_message(chat_id, text[:TG_MAX_LEN], **kw)
+                return True
+            except Forbidden:
+                logger.info("chat %s blocked the bot; dropping its watches", chat_id)
+                self.service.forget_chat(chat_id)
+                return False
+            except RetryAfter as exc:
+                if attempt == 2:
+                    logger.warning("deliver flood-limited chat=%s", chat_id)
+                    return False
+                await asyncio.sleep(min(float(exc.retry_after) + 0.5, 30))
+            except BadRequest as exc:
+                if "chat not found" in str(exc).lower():
+                    self.service.forget_chat(chat_id)
+                logger.warning("deliver rejected chat=%s: %s", chat_id, exc)
+                return False
             except Exception as exc:
                 logger.warning("deliver failed chat=%s: %s", chat_id, exc)
+                return False
+        return False
+
+    async def _job(self, context):
+        async def send(chat_id, signal, source="watch"):
+            await self._send_safe(
+                chat_id, msg.signal_message(signal, source=source),
+                reply_markup=ui.followup_keyboard(signal["pair"]))
         try:
             await self.service.tick(send)
         except Exception as exc:
-            logger.warning("tick failed: %s", exc)
+            logger.exception("tick failed: %s", exc)
+        health.beat("tick")
         self._sweep_tick += 1
+        if self._sweep_tick % TELEGRAM_CHECK_EVERY == 1:
+            try:
+                await self.app.bot.get_me()
+                health.beat("telegram")
+            except Exception as exc:
+                logger.warning("telegram api check failed: %s", exc)
         if self.site.enabled and self._sweep_tick % 4 == 0:
             try:
                 granted = await asyncio.to_thread(
                     site_entitlements.sweep, self.site, self.service)
-                for chat_id, row, until in granted:
-                    await self.app.bot.send_message(
-                        chat_id, msg.site_pro_activated_text(row, until),
-                        parse_mode=ParseMode.HTML)
             except Exception as exc:
                 logger.warning("site sweep failed: %s", exc)
+                granted = []
+            for chat_id, row, until in granted:
+                await self._send_safe(chat_id, msg.site_pro_activated_text(row, until))
         try:
-            for chat_id in self.service.expiry_nudges():
-                await self.app.bot.send_message(
-                    chat_id, msg.expiry_nudge_text(),
-                    parse_mode=ParseMode.HTML)
+            nudges = self.service.expiry_nudges()
         except Exception as exc:
-            logger.warning("nudge failed: %s", exc)
+            logger.warning("nudge scan failed: %s", exc)
+            nudges = []
+        for chat_id in nudges:
+            await self._send_safe(chat_id, msg.expiry_nudge_text())
+
+    async def on_error(self, update, ctx):
+        """Last line of defence: the user hears back, the operator is told."""
+        err = ctx.error
+        chat = getattr(update, "effective_chat", None) if update is not None else None
+        chat_id = getattr(chat, "id", None)
+        if isinstance(err, Forbidden):
+            if chat_id is not None:
+                self.service.forget_chat(chat_id)
+            return
+        if isinstance(err, (RetryAfter, BadRequest, TelegramError)):
+            logger.warning("telegram error chat=%s: %s", chat_id, err)
+        else:
+            logger.exception("unhandled error chat=%s: %s", chat_id, err)
+            now = time.time()
+            if now - self._error_alert_ts > 300 and self.service.on_alert:
+                self._error_alert_ts = now
+                try:
+                    self.service.on_alert(
+                        f"Bot error for chat {chat_id}: {type(err).__name__}: {err}")
+                except Exception:
+                    pass
+        if chat is None:
+            return
+        if isinstance(err, StateError):
+            text = ("\u26a0\ufe0f Could not save that change right now. Nothing was "
+                    "charged or lost \u2014 please try again in a minute.")
+        elif isinstance(err, BadRequest):
+            text = ("\U0001f9f9 That reply could not be rendered. Please try again "
+                    "or pick a market from the buttons.")
+        else:
+            text = ("\U0001f9f9 Something went wrong on our side. Please try again "
+                    "in a moment \u2014 the team has been notified.")
+        try:
+            await chat.send_message(text, parse_mode=ParseMode.HTML,
+                                    reply_markup=ui.help_keyboard())
+        except Exception:
+            pass
+
+    async def cmd_export(self, update, ctx):
+        """Admin only: DM the current state file as a backup."""
+        admin_id = (self.pay or {}).get("admin_id")
+        sender = update.effective_user.id if update.effective_user else None
+        if admin_id is None or sender != admin_id:
+            return
+        data = self.service.export_bytes()
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+        await update.effective_chat.send_document(
+            io.BytesIO(data), filename=f"ezyai-state-{stamp}.json",
+            caption=f"State export \u00b7 {len(data):,} bytes")
 
     async def _reply(self, update, text, **kw):
         if not text:
@@ -140,6 +255,13 @@ class Bot:
         except Exception:
             pass
 
+    async def _resolve(self, pair):
+        """(kind, symbol) or None. Symbol lookup can hit several upstream
+        hosts, so it always runs off the event loop."""
+        if not pair or len(pair) > 24:
+            return None
+        return await asyncio.to_thread(self.hub.resolve_loose, pair)
+
     # -- top-level commands -------------------------------------------------
 
     async def cmd_start(self, update, ctx):
@@ -147,14 +269,35 @@ class Bot:
         await self._reply(
             update,
             "Welcome to <b>EzyAi</b> \u2014 live market analysis, "
-            "alerts and auto signals.",
+            "alerts and auto signals.\n\n"
+            "\u26a0\ufe0f Educational research only, not financial advice. "
+            "Markets carry risk \u2014 verify every level with your broker.",
             reply_markup=ui.help_keyboard())
         await self._redeem_site(update)
 
     # -- website purchases (printezy.money) ----------------------------------
 
-    async def _remember_user(self, update, ctx):
-        """Runs before every handler (group -1)."""
+    def _over_rate_limit(self, chat_id, now=None):
+        """Sliding one-minute window per chat. Only a burst well beyond
+        human speed trips it, so real users never notice."""
+        now = now or time.time()
+        q = self._buckets.get(chat_id)
+        if q is None:
+            q = self._buckets[chat_id] = deque()
+        while q and now - q[0] > 60:
+            q.popleft()
+        if len(q) >= constants.RATE_LIMIT_PER_MINUTE:
+            return True
+        q.append(now)
+        if len(self._buckets) > 5000:  # bound memory on a long-running process
+            for cid in [c for c, d in self._buckets.items() if not d or now - d[-1] > 120]:
+                self._buckets.pop(cid, None)
+        return False
+
+    async def _pre_update(self, update, ctx):
+        """Runs before every handler (group -1): liveness beat, handle
+        bookkeeping for website purchases, and the per-chat rate limit."""
+        health.beat("update")
         user = getattr(update, "effective_user", None)
         chat = getattr(update, "effective_chat", None)
         if user is not None and chat is not None and getattr(user, "username", None):
@@ -162,6 +305,26 @@ class Bot:
                 self.service.remember_user(chat.id, user.username)
             except Exception as exc:
                 logger.debug("remember_user failed: %s", exc)
+        if chat is None:
+            return
+        billable = (update.callback_query is not None
+                    or (update.message is not None and update.message.text))
+        if billable and self._over_rate_limit(chat.id):
+            q = self._buckets[chat.id]
+            # tell them once per burst, then stay silent
+            if len(q) == constants.RATE_LIMIT_PER_MINUTE:
+                q.append(time.time())
+                try:
+                    if update.callback_query is not None:
+                        await update.callback_query.answer(
+                            "Slow down a little \u2014 try again in a minute.",
+                            show_alert=True)
+                    else:
+                        await chat.send_message(
+                            "\u23f3 Slow down a little \u2014 try again in a minute.")
+                except Exception:
+                    pass
+            raise ApplicationHandlerStop
 
     async def _redeem_site(self, update):
         """Claim PRO bought on the website for this user's handle. Returns
@@ -206,10 +369,10 @@ class Bot:
     async def cmd_analyze(self, update, ctx):
         args = ctx.args
         if args:
-            pair = args[0].upper()
-            if not self.hub.resolve_loose(pair):
+            pair = args[0].upper()[:24]
+            if await self._resolve(pair) is None:
                 await self._reply(
-                    update, f"Unknown symbol <b>{pair}</b>.",
+                    update, f"Unknown symbol <b>{escape(pair)}</b>.",
                     reply_markup=ui.retry_pair_keyboard("analyze"))
                 return
             ctx.user_data[self._flow_key()] = {"flow": "analyze", "pair": pair}
@@ -220,7 +383,8 @@ class Bot:
 
     async def _run_analyze(self, update, ctx, pair, style, mode, query=None):
         await self._typing(update, ctx)
-        status = (f"\U0001f4c8 Scanning <b>{pair}</b> \u00b7 {style}/{mode}\u2026")
+        status = (f"\U0001f4c8 Scanning <b>{escape(pair)}</b> \u00b7 "
+                  f"{escape(style)}/{escape(mode)}\u2026")
         if query is not None:
             await self._edit_or_send(query, status)
         else:
@@ -242,8 +406,10 @@ class Bot:
                 pair, style, mode, self.hub, None, score))[0]
         except Exception as exc:
             target = query.message if query is not None else None
-            text = (f"\U0001f9f9 Analysis hiccup for <b>{pair}</b> ({exc}) \u2014 "
-                    "feeds stumble sometimes. Tap retry in a few seconds.")
+            logger.warning("analyze failed pair=%s: %s: %s", pair,
+                           type(exc).__name__, exc)
+            text = (f"\U0001f9f9 Analysis hiccup for <b>{escape(pair)}</b> \u2014 "
+                    "the data feed stumbled. Tap retry in a few seconds.")
             kb = ui.retry_pair_keyboard("analyze")
             if target is not None:
                 await target.reply_text(text, parse_mode=ParseMode.HTML,
@@ -269,9 +435,11 @@ class Bot:
         await self._typing(update, ctx)
         try:
             tick = await asyncio.to_thread(self.hub.fetch_ticker, pair)
-            tick["mode"] = "demo" if self.hub.mode == "demo" else "live"
-        except Exception:
-            text = (f"Could not fetch <b>{pair}</b> \u2014 feed hiccup. "
+            tick.setdefault("mode", "live")
+        except Exception as exc:
+            logger.warning("quote failed pair=%s: %s: %s", pair,
+                           type(exc).__name__, exc)
+            text = (f"Could not fetch <b>{escape(pair)}</b> \u2014 feed hiccup. "
                     "Retry in a few seconds.")
             kb = ui.retry_pair_keyboard("quote")
             if query is not None:
@@ -295,7 +463,7 @@ class Bot:
 
     def _fundamentals_text(self, pair, pro=True):
         resolved = self.hub.resolve_loose(pair)
-        if not resolved:
+        if resolved is None:
             return None
         kind, sym = resolved
         data = None
@@ -310,7 +478,7 @@ class Bot:
                 data = self.fund.cfd(sym, tag=pair)
         except Exception:
             data = None
-        text = msg.fundamentals_report(kind, pair, data, self.hub.mode, pro=pro)
+        text = msg.fundamentals_report(kind, pair, data, "live", pro=pro)
         links = self.fund.links(kind, pair)
         try:
             news = self.fund.news(constants.base_asset(pair), limit=4)
@@ -328,14 +496,16 @@ class Bot:
             # EDGAR/Coingecko/COT fetches are slow synchronous requests;
             # run off the loop so other users keep getting replies
             text = await asyncio.to_thread(self._fundamentals_text, pair, pro)
-        except Exception:
+        except Exception as exc:
+            logger.warning("fundamentals failed pair=%s: %s: %s", pair,
+                           type(exc).__name__, exc)
             text = None
         if not text:
             kb = ui.retry_pair_keyboard("fund")
             if query is not None:
-                await self._edit_or_send(query, f"Unknown symbol <b>{pair}</b>.", kb)
+                await self._edit_or_send(query, f"Unknown symbol <b>{escape(pair)}</b>.", kb)
             else:
-                await self._reply(update, f"Unknown symbol <b>{pair}</b>.",
+                await self._reply(update, f"Unknown symbol <b>{escape(pair)}</b>.",
                                   reply_markup=kb)
             return
         chat = update.effective_chat
@@ -353,26 +523,30 @@ class Bot:
         if len(args) < 3:
             await self._start_flow(update, ctx, "watch")
             return
-        pair, style, mode = args[0].upper(), args[1].lower(), args[2].lower()
-        err = self._validate_pair_style_mode(pair, style, mode)
+        pair, style, mode = args[0].upper()[:24], args[1].lower(), args[2].lower()
+        err = await self._validate_pair_style_mode(pair, style, mode)
         if err:
             await self._reply(update, err,
                               reply_markup=ui.retry_pair_keyboard("watch"))
             return
-        self._add_watch(update, pair, style, mode)
+        if self._add_watch(update, pair, style, mode) is None:
+            await self._reply(update, msg.watch_cap_text(constants.MAX_WATCHES),
+                              reply_markup=ui.watches_keyboard(
+                                  self.service.list_watches(update.effective_chat.id)))
+            return
         await self._reply(update, msg.watch_added_text(pair, style, mode),
                           reply_markup=ui.watches_keyboard(
                               self.service.list_watches(update.effective_chat.id)))
 
-    def _validate_pair_style_mode(self, pair, style, mode):
+    async def _validate_pair_style_mode(self, pair, style, mode):
         if style not in constants.STYLES:
-            return (f"Unknown style <b>{style}</b>. "
+            return (f"Unknown style <b>{escape(style[:24])}</b>. "
                     "Use the buttons: scalping, intraday or swing.")
         if mode not in constants.MODES:
-            return (f"Unknown mode <b>{mode}</b>. "
+            return (f"Unknown mode <b>{escape(mode[:24])}</b>. "
                     "Use the buttons: safe, normal or aggressive.")
-        if not self.hub.resolve_loose(pair):
-            return f"Unknown symbol <b>{pair}</b>."
+        if await self._resolve(pair) is None:
+            return f"Unknown symbol <b>{escape(pair)}</b>."
         return None
 
     def _add_watch(self, update, pair, style, mode):
@@ -647,9 +821,9 @@ class Bot:
         try:
             await ctx.bot.send_message(
                 admin_id,
-                f"\U0001f4b0 USDT claim: <b>{name}</b> (id <code>{chat_id}</code>)\n"
+                f"\U0001f4b0 USDT claim: <b>{escape(name)}</b> (id <code>{chat_id}</code>)\n"
                 f"claims <b>{plan['label']}</b> \u2014 ${plan['usd']:.2f}\n"
-                f"TXID: <code>{txid}</code>\n"
+                f"TXID: <code>{escape(txid)}</code>\n"
                 "Approve after checking the network.",
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([[
@@ -682,11 +856,21 @@ class Bot:
         # charge id makes Telegram redeliveries (e.g. after a restart)
         # idempotent: the same payment can never grant two periods
         charge_id = (getattr(sp, "telegram_payment_charge_id", None)
-                     or getattr(sp, "provider_payment_charge_id", None))
-        until = self.service.activate_pro(info["chat_id"], months,
-                                          event_id=charge_id)
-        import datetime
-        date = datetime.datetime.fromtimestamp(until, datetime.timezone.utc).strftime("%d %b %Y")
+                     or getattr(sp, "provider_payment_charge_id", None)
+                     or f"tg_update:{update.update_id}")
+        try:
+            until = self.service.activate_pro(info["chat_id"], months,
+                                              event_id=charge_id)
+        except StateError:
+            logger.error("stars payment not persisted charge=%s chat=%s",
+                         charge_id, info["chat_id"])
+            await self._reply(update, "\u2705 Payment received. Activation is "
+                                      "taking a moment \u2014 the team has been "
+                                      "notified and will confirm shortly.")
+            return
+        logger.info("stars PRO activated chat=%s tier=%s charge=%s",
+                    info["chat_id"], info["tier"], charge_id)
+        date = _fmt_date(until)
         try:
             await ctx.bot.send_message(
                 info["chat_id"],
@@ -742,7 +926,12 @@ class Bot:
 
     async def cb_flow(self, update, ctx):
         query = update.callback_query
-        await query.answer()
+        try:
+            await query.answer()
+        except BadRequest as exc:
+            # Stale queries (older than ~48h or from before a restart) cannot
+            # be answered, but the tap itself is still worth serving.
+            logger.debug("callback answer failed: %s", exc)
         chat_id = update.effective_chat.id
         cb = ui.parse_callback(query.data)
         flow = self._get_flow(ctx)
@@ -771,9 +960,9 @@ class Bot:
                     return
                 ctx.user_data[self._flow_key()] = {"flow": target, "page": 0}
                 if pair:
-                    if not self.hub.resolve_loose(pair):
+                    if await self._resolve(pair) is None:
                         await self._edit_or_send(
-                            query, f"Unknown symbol <b>{pair}</b>.",
+                            query, f"Unknown symbol <b>{escape(pair)}</b>.",
                             ui.retry_pair_keyboard(target))
                         return
                     ctx.user_data[self._flow_key()]["pair"] = pair
@@ -796,8 +985,9 @@ class Bot:
                     text, parse_mode=ParseMode.HTML,
                     disable_web_page_preview=True,
                     reply_markup=ui.pair_keyboard(flow_name, page))
-            except Exception:
-                pass
+            except BadRequest as exc:
+                if "not modified" not in str(exc).lower():
+                    logger.warning("pair page edit failed: %s", exc)
             return
 
         if action == "pick":
@@ -809,8 +999,8 @@ class Bot:
                     query, "Send the symbol (e.g. BTCUSD, EURUSD, AAPL):",
                     ui.custom_pair_keyboard(flow_name))
                 return
-            if not self.hub.resolve_loose(pair):
-                await self._edit_or_send(query, f"Unknown symbol <b>{pair}</b>.",
+            if await self._resolve(pair) is None:
+                await self._edit_or_send(query, f"Unknown symbol <b>{escape(pair)}</b>.",
                                          ui.retry_pair_keyboard(flow_name))
                 return
             ctx.user_data[self._flow_key()]["pair"] = pair
@@ -897,7 +1087,11 @@ class Bot:
                 await self._restart(update, ctx, "watch", query)
                 return
             ctx.user_data.pop(self._flow_key(), None)
-            self._add_watch(update, pair, style, mode)
+            if self._add_watch(update, pair, style, mode) is None:
+                await self._edit_or_send(
+                    query, msg.watch_cap_text(constants.MAX_WATCHES),
+                    ui.watches_keyboard(self.service.list_watches(chat_id)))
+                return
             await self._edit_or_send(
                 query, msg.watch_added_text(pair, style, mode),
                 ui.watches_keyboard(self.service.list_watches(chat_id)))
@@ -963,8 +1157,7 @@ class Bot:
                     query, "Trial already used on this account \u2014 pick a plan:",
                     ui.plans_keyboard(False))
                 return
-            import datetime
-            date = datetime.datetime.fromtimestamp(until, datetime.timezone.utc).strftime("%d %b")
+            date = _fmt_date(until)
             await self._edit_or_send(
                 query,
                 f"\U0001f381 <b>Trial on!</b> Full PRO until {date}.\n"
@@ -1023,16 +1216,29 @@ class Bot:
             if admin_id is None or sender != admin_id:
                 logger.warning("admin action denied: sender=%s admin_id=%s",
                                sender, admin_id)
-                await query.answer("Admins only.", show_alert=True)
+                # the query was already answered above; reply instead
+                await query.message.reply_text("Admins only.")
                 return
             target = cb["chat"]
             if action == "admin_ok":
-                months = constants.PLANS[cb["tier"]]["months"]
-                until = self.service.activate_pro(target, months)
+                plan = constants.PLANS.get(cb.get("tier"))
+                if not plan:
+                    await self._edit_or_send(query, "Malformed approval button.")
+                    return
+                # One grant per approval message: a double tap on the same
+                # button replays instead of stacking a second period.
+                claim_id = f"usdt:{query.message.chat_id}:{query.message.message_id}"
+                try:
+                    until = self.service.activate_pro(target, plan["months"],
+                                                      event_id=claim_id)
+                except StateError:
+                    await self._edit_or_send(
+                        query, "Could not save the activation \u2014 state file "
+                               "problem. Fix storage and tap Approve again.")
+                    return
                 logger.info("admin approved PRO %s for %s until %s",
                             cb["tier"], target, until)
-                import datetime
-                date = datetime.datetime.fromtimestamp(until, datetime.timezone.utc).strftime("%d %b %Y")
+                date = _fmt_date(until)
                 try:
                     await ctx.bot.send_message(
                         target,
@@ -1081,7 +1287,7 @@ class Bot:
         try:
             await ctx.bot.send_photo(
                 admin_id, file_id,
-                caption=(f"\U0001f4b0 USDT claim: <b>{name}</b> (id <code>{chat_id}</code>)\n"
+                caption=(f"\U0001f4b0 USDT claim: <b>{escape(name)}</b> (id <code>{chat_id}</code>)\n"
                          f"claims <b>{plan['label']}</b> \u2014 ${plan['usd']:.2f}\n"
                          "Proof screenshot below. Approve after checking."),
                 parse_mode=ParseMode.HTML,
@@ -1119,9 +1325,9 @@ class Bot:
             return
         if not flow or flow.get("step") != "custom_pair":
             return
-        pair = text.upper()
-        if not self.hub.resolve_loose(pair):
-            await self._reply(update, f"Unknown symbol <b>{pair}</b>. Try again:",
+        pair = text.upper()[:24]
+        if not pair.isalnum() or await self._resolve(pair) is None:
+            await self._reply(update, f"Unknown symbol <b>{escape(pair)}</b>. Try again:",
                               reply_markup=ui.retry_pair_keyboard(flow.get("flow", "analyze")))
             return
         flow_name = flow.get("flow", "analyze")
