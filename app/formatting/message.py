@@ -548,13 +548,14 @@ def watch_list(rows):
     return "\n".join(lines)
 
 
-def pro_gate(feature, can_trial):
+def pro_gate(feature, can_trial, trial_days=None):
+    from .. import constants as _c
+    days = trial_days or _c.TRIAL_DAYS
     lines = [f"\U0001f512 <b>{feature} is a PRO feature</b>",
              "Live alerts, autopilot signals and deep research are what PRO pays for. "
              "Analyze stays free forever."]
     if can_trial:
-        from .. import constants as _c
-        lines.append(f"\U0001f381 Start with a <b>{_c.TRIAL_DAYS}-day free trial</b> \u2014 "
+        lines.append(f"\U0001f381 Start with a <b>{days}-day free trial</b> \u2014 "
                      "full PRO, no payment needed.")
     return "\n".join(lines)
 
@@ -579,6 +580,8 @@ REDEEM_TEXT = {
                   "support with your receipt if you're sure it's right."),
     "already": "That code was already redeemed on this account \u2014 PRO is active.",
     "expired": "That code has expired. Ask whoever gave it to you for a fresh one.",
+    "discount": ("\U0001f3f7 <b>{percent}% off</b> applied to your next PRO purchase. "
+                 "Open /plans \u2014 Stars, card and USDT prices all show the discount."),
     "used": "That code has already been used up.",
     "error": "Could not reach printezy.money right now \u2014 try again in a minute.",
     "prompt": ("\U0001f39f Paste your PRO code from printezy.money "
@@ -589,16 +592,30 @@ REDEEM_TEXT = {
 def gift_code_activated_text(rec, until):
     import datetime
     date = datetime.datetime.fromtimestamp(until, datetime.timezone.utc).strftime("%d %b %Y")
+    if rec.get("kind") == "trial":
+        d = int(rec.get("days", 0))
+        span = "1 day" if d == 1 else f"{d} days"
+        return (f"\U0001f381 <b>PRO trial activated</b> \u00b7 {span}, until {date}.\n"
+                "Try watches, autopilot and deep fundamentals \u2014 on the house.")
     months = int(rec.get("months", 0))
     span = "1 month" if months == 1 else f"{months} months"
     return (f"\U0001f381 <b>PRO activated</b> \u00b7 {span} until {date}.\n"
             "Gift code accepted \u2014 your watches resume automatically. Enjoy!")
 
 
-def codes_minted_text(codes, tier, uses, days):
+def code_kind_label(rec):
     from .. import constants as _c
-    label = _c.PLANS[tier]["label"]
-    lines = [f"\U0001f39f <b>{len(codes)} gift code(s)</b> \u00b7 {label} \u00b7 "
+    kind = rec.get("kind", "gift")
+    if kind == "trial":
+        return f"{rec.get('days')}-day trial"
+    if kind == "discount":
+        return f"{rec.get('percent')}% off"
+    plan = _c.PLANS.get(rec.get("tier"), {})
+    return f"gift {plan.get('label', rec.get('tier'))}"
+
+
+def codes_minted_text(codes, rec, uses, days):
+    lines = [f"\U0001f39f <b>{len(codes)} code(s)</b> \u00b7 {code_kind_label(rec)} \u00b7 "
              f"{uses} use(s) each \u00b7 valid {days} days"]
     lines += [f"<code>{c}</code>" for c in codes]
     lines.append("Customers activate with /redeem CODE.")
@@ -613,23 +630,35 @@ def codes_list_text(rows):
     for code, rec, _live in rows[:40]:
         exp = datetime.datetime.fromtimestamp(rec.get("expires_at", 0),
                                               datetime.timezone.utc).strftime("%d %b")
-        lines.append(f"<code>{code}</code> \u00b7 {rec.get('tier')} \u00b7 "
+        lines.append(f"<code>{code}</code> \u00b7 {code_kind_label(rec)} \u00b7 "
                      f"{rec.get('uses_left', 0)} left \u00b7 exp {exp}")
     if len(rows) > 40:
         lines.append(f"\u2026 and {len(rows) - 40} more")
     return "\n".join(lines)
 
 
-def plans_text(trial_eligible):
+def plans_text(trial_eligible, trial_days=None, discount=None):
     from .. import billing as _b
     from .. import constants as _c
+    days = trial_days or _c.TRIAL_DAYS
+    pct = int((discount or {}).get("percent", 0) or 0)
     lines = ["\U0001f48e <b>EzyAi PRO</b> \u2014 alerts, autopilot, deep research.",
              "Analyze stays free on every plan.", DIV]
     for tid in _c.PLAN_ORDER:
-        lines.append("\u25b8 " + _b.tier_line(tid))
+        line = "\u25b8 " + _b.tier_line(tid)
+        if pct:
+            p = _c.PLANS[tid]
+            line = (f"\u25b8 {p['label']} \u2014 <s>${p['usd']:.2f}</s> "
+                    f"<b>${_b.discounted_usd(p['usd'], pct):.2f}</b>")
+            if p["badge"]:
+                line += f" \u2b50 {p['badge']}"
+        lines.append(line)
     lines.append("")
+    if pct:
+        lines.append(f"\U0001f3f7 <b>{pct}% off</b> applied \u2014 code "
+                     f"<code>{escape(str(discount.get('code', '')))}</code>, one purchase.")
     if trial_eligible:
-        lines.append(f"\U0001f381 New here? Take the <b>{_c.TRIAL_DAYS}-day free trial</b> first \u2014 "
+        lines.append(f"\U0001f381 New here? Take the <b>{days}-day free trial</b> first \u2014 "
                      "full PRO, no card.")
     else:
         lines.append("Trial already used on this account.")
@@ -640,9 +669,11 @@ def plans_text(trial_eligible):
     return "\n".join(lines)
 
 
-def account_text(status, watches_n, autopilot_on, comped=False):
+def account_text(status, watches_n, autopilot_on, comped=False, trial_days=None):
     import datetime
     import time as _t
+    from .. import constants as _c
+    days = trial_days or _c.TRIAL_DAYS
     plan, until = status["plan"], status.get("until", 0.0)
     if comped:
         state = "<b>PRO</b> \u00b7 team access"
@@ -650,17 +681,15 @@ def account_text(status, watches_n, autopilot_on, comped=False):
         date = datetime.datetime.fromtimestamp(until, datetime.timezone.utc).strftime("%d %b %Y")
         state = f"<b>PRO</b> until {date}"
     elif plan == "trial":
-        from .. import constants as _c
         left = max(0, int((until - _t.time()) / 86400) + 1)
         state = (f"<b>Trial</b> \u00b7 {left} day(s) left "
-                 f"{meter(left, _c.TRIAL_DAYS, width=3)}")
+                 f"{meter(left, days, width=3)}")
     else:
         state = "<b>Free</b> (Analyze only)"
     lines = ["\U0001f464 <b>Your account</b>", f"Plan: {state}",
              f"Watching: {watches_n} pair(s) \u00b7 Autopilot: {'on' if autopilot_on else 'off'}"]
     if plan == "free" and not comped and not status.get("trial_used"):
-        from .. import constants as _c
-        lines.append(f"\U0001f381 You still have your {_c.TRIAL_DAYS}-day free trial \u2014 see /plans.")
+        lines.append(f"\U0001f381 You still have your {days}-day free trial \u2014 see /plans.")
     return "\n".join(lines)
 
 

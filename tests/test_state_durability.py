@@ -268,3 +268,63 @@ def test_gift_code_rolls_back_when_save_fails(tmp_path, monkeypatch):
     with pytest.raises(StateError):
         svc.redeem_local_code(9, code)
     assert svc.codes[code]["uses_left"] == 1 and svc.codes[code]["redeemed"] == []
+
+
+# -- trial and discount codes, trial length ----------------------------------------
+
+def test_trial_code_grants_days_and_extends(tmp_path):
+    svc = _svc(tmp_path)
+    (code,) = svc.mint_codes(kind="trial", value=7, count=1)
+    status, until = svc.redeem_local_code(21, code)
+    assert status == "ok" and abs(until - (time.time() + 7 * 86400)) < 5
+    assert svc.is_pro(21) and svc.plan_status(21)["trial_used"] is False
+    (more,) = svc.mint_codes(kind="trial", value=3)
+    status, until2 = svc.redeem_local_code(21, more)
+    assert status == "ok" and abs(until2 - (until + 3 * 86400)) < 5
+
+
+def test_discount_code_sets_and_consumes(tmp_path):
+    svc = _svc(tmp_path)
+    (code,) = svc.mint_codes(kind="discount", value=20, count=1, uses=5)
+    assert svc.redeem_local_code(31, code) == ("ok_discount", 20)
+    d = svc.discount_for(31)
+    assert d and d["percent"] == 20 and d["code"] == code
+    assert not svc.is_pro(31)  # a discount grants nothing by itself
+    svc2 = Service(object(), tmp_path / "state.json")
+    assert svc2.discount_for(31)["percent"] == 20
+    assert svc2.consume_discount(31)["percent"] == 20
+    assert svc2.consume_discount(31) is None and svc2.discount_for(31) is None
+    # same code, same chat: refused; another chat: fine (5 uses)
+    assert svc2.redeem_local_code(31, code)[0] == "already"
+    assert svc2.redeem_local_code(32, code)[0] == "ok_discount"
+
+
+def test_expired_discount_is_ignored(tmp_path):
+    svc = _svc(tmp_path)
+    svc.set_discount(41, "EZY-AAAA-BBBB", 50, time.time() - 1)
+    assert svc.discount_for(41) is None
+
+
+def test_mint_validates_kind_and_value(tmp_path):
+    svc = _svc(tmp_path)
+    with pytest.raises(ValueError):
+        svc.mint_codes(kind="discount", value=0)
+    with pytest.raises(ValueError):
+        svc.mint_codes(kind="discount", value=95)
+    with pytest.raises(ValueError):
+        svc.mint_codes(kind="bogus", value=1)
+    (t,) = svc.mint_codes(kind="trial", value=9999)
+    assert svc.codes[t]["days"] == 366
+
+
+def test_trial_days_setting_persists_and_bounds(tmp_path):
+    svc = _svc(tmp_path)
+    assert svc.trial_days() == constants.TRIAL_DAYS
+    assert svc.set_trial_days(7) == 7
+    assert svc.set_trial_days(99) == sched.TRIAL_DAYS_MAX
+    assert svc.set_trial_days(0) == 1
+    svc.set_trial_days(5)
+    svc2 = Service(object(), tmp_path / "state.json")
+    assert svc2.trial_days() == 5
+    until = svc2.start_trial(51)
+    assert abs(until - (time.time() + 5 * 86400)) < 5

@@ -100,6 +100,7 @@ class Bot:
         a.add_handler(CommandHandler("mkcode", self.cmd_mkcode))
         a.add_handler(CommandHandler("codes", self.cmd_codes))
         a.add_handler(CommandHandler("revokecode", self.cmd_revokecode))
+        a.add_handler(CommandHandler("settrial", self.cmd_settrial))
         a.add_handler(CallbackQueryHandler(self.cb_flow, pattern=r"^ezy:"))
         a.add_handler(PreCheckoutQueryHandler(self.on_precheckout))
         a.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, self.on_paid))
@@ -399,6 +400,12 @@ class Bot:
             await self._reply(update, msg.gift_code_activated_text(
                 self.service.codes.get(code, {}), until))
             return
+        if status == "ok_discount":
+            logger.info("discount code redeemed chat=%s code=%s pct=%s", chat_id, code, until)
+            text, kb = self._plans_view(chat_id)
+            await self._reply(update, msg.REDEEM_TEXT["discount"].format(percent=until))
+            await self._reply(update, text, reply_markup=kb)
+            return
         if status != "not_found":
             logger.info("gift code chat=%s status=%s", chat_id, status)
             await self._reply(update, msg.REDEEM_TEXT[status])
@@ -422,27 +429,59 @@ class Bot:
         sender = update.effective_user.id if update.effective_user else None
         return admin_id is not None and sender == admin_id
 
+    MKCODE_USAGE = ("Usage:\n"
+                    "/mkcode TIER [COUNT] [USES] [VALID_DAYS] \u2014 free months "
+                    "(TIER: 1mo, 6mo, 12mo)\n"
+                    "/mkcode trial DAYS [COUNT] [USES] [VALID_DAYS] \u2014 free PRO days\n"
+                    "/mkcode off PERCENT [COUNT] [USES] [VALID_DAYS] \u2014 % off next purchase\n"
+                    "Example: /mkcode off 20 10 \u2192 ten single-use 20% codes.")
+
     async def cmd_mkcode(self, update, ctx):
-        """/mkcode TIER [COUNT] [USES] [DAYS]: mint gift codes."""
+        """Mint gift, trial or discount codes (admin only)."""
         if not self._is_admin(update):
             return
-        args = ctx.args or []
-        tier = (args[0] if args else "").lower()
-        if tier not in constants.PLANS:
-            await self._reply(update, "Usage: /mkcode TIER [COUNT] [USES] [DAYS]\n"
-                                      f"TIER: {', '.join(constants.PLAN_ORDER)}")
+        args = [a.lower() for a in (ctx.args or [])]
+        if not args:
+            await self._reply(update, self.MKCODE_USAGE)
+            return
+        head = args[0]
+        try:
+            if head in constants.PLANS:
+                kind, value, tier, rest = "gift", None, head, args[1:]
+            elif head in ("trial", "off", "discount"):
+                kind = "trial" if head == "trial" else "discount"
+                tier, value, rest = None, int(args[1]), args[2:]
+            else:
+                await self._reply(update, self.MKCODE_USAGE)
+                return
+            count = int(rest[0]) if len(rest) > 0 else 1
+            uses = int(rest[1]) if len(rest) > 1 else 1
+            days = int(rest[2]) if len(rest) > 2 else 90
+            codes = self.service.mint_codes(tier, count, uses, days,
+                                            created_by=update.effective_user.id,
+                                            kind=kind, value=value)
+        except (ValueError, IndexError) as exc:
+            await self._reply(update, f"{escape(str(exc))}\n\n{self.MKCODE_USAGE}")
+            return
+        rec = self.service.codes[codes[0]]
+        logger.info("admin minted %d codes kind=%s uses=%s", len(codes), kind, uses)
+        await self._reply(update, msg.codes_minted_text(codes, rec, uses, days))
+
+    async def cmd_settrial(self, update, ctx):
+        """/settrial DAYS: length of the one-time free trial (admin only)."""
+        if not self._is_admin(update):
+            return
+        if not ctx.args:
+            await self._reply(update, f"Free trial is <b>{self.service.trial_days()}</b> "
+                                      "day(s). Change with /settrial DAYS (1-30).")
             return
         try:
-            count = int(args[1]) if len(args) > 1 else 1
-            uses = int(args[2]) if len(args) > 2 else 1
-            days = int(args[3]) if len(args) > 3 else 90
+            days = self.service.set_trial_days(int(ctx.args[0]))
         except ValueError:
-            await self._reply(update, "COUNT, USES and DAYS must be whole numbers.")
+            await self._reply(update, "DAYS must be a whole number 1-30.")
             return
-        codes = self.service.mint_codes(tier, count, uses, days,
-                                        created_by=update.effective_user.id)
-        logger.info("admin minted %d gift codes tier=%s uses=%s", len(codes), tier, uses)
-        await self._reply(update, msg.codes_minted_text(codes, tier, uses, days))
+        logger.info("admin set trial_days=%s", days)
+        await self._reply(update, f"Free trial is now <b>{days}</b> day(s) for new accounts.")
 
     async def cmd_codes(self, update, ctx):
         if not self._is_admin(update):
@@ -755,6 +794,21 @@ class Bot:
 
     # -- monetization -------------------------------------------------------
 
+    def _offer(self, chat_id, plan):
+        """(usd, stars, percent) for this chat: the live discount applied."""
+        d = self.service.discount_for(chat_id)
+        pct = int(d["percent"]) if d else 0
+        return (billing.discounted_usd(plan["usd"], pct),
+                billing.discounted_stars(plan["stars"], pct), pct)
+
+    def _plans_view(self, chat_id):
+        eligible = self._trial_eligible(chat_id)
+        days = self.service.trial_days()
+        d = self.service.discount_for(chat_id)
+        pct = int(d["percent"]) if d else 0
+        return (msg.plans_text(eligible, days, d),
+                ui.plans_keyboard(eligible, days, pct))
+
     def _trial_eligible(self, chat_id):
         return not self.service.plan_status(chat_id).get("trial_used", True)
 
@@ -764,8 +818,9 @@ class Bot:
         # that unlocked PRO there is nothing to gate.
         if await self._redeem_site(update) and self.service.is_pro(chat_id):
             return
-        text = msg.pro_gate(feature, self._trial_eligible(chat_id))
-        kb = ui.plans_keyboard(self._trial_eligible(chat_id))
+        text = msg.pro_gate(feature, self._trial_eligible(chat_id),
+                            self.service.trial_days())
+        kb = ui.plans_keyboard(self._trial_eligible(chat_id), self.service.trial_days())
         if query is not None:
             await self._edit_or_send(query, text, kb)
         else:
@@ -775,14 +830,12 @@ class Bot:
         chat_id = update.effective_chat.id
         if await self._redeem_site(update) and self.service.is_pro(chat_id):
             return
-        eligible = self._trial_eligible(chat_id)
-        await self._reply(update, msg.plans_text(eligible),
-                          reply_markup=ui.plans_keyboard(eligible))
+        text, kb = self._plans_view(chat_id)
+        await self._reply(update, text, reply_markup=kb)
 
     async def _send_plans(self, query, chat_id):
-        eligible = self._trial_eligible(chat_id)
-        await self._edit_or_send(query, msg.plans_text(eligible),
-                                 ui.plans_keyboard(eligible))
+        text, kb = self._plans_view(chat_id)
+        await self._edit_or_send(query, text, kb)
 
     async def cmd_account(self, update, ctx):
         chat_id = update.effective_chat.id
@@ -792,10 +845,10 @@ class Bot:
         watches = self.service.list_watches(chat_id)
         pilot = self.service.autopilots.get(str(chat_id))
         text = msg.account_text(status, len(watches), pilot is not None,
-                                comped=comped)
+                                comped=comped, trial_days=self.service.trial_days())
         if status["plan"] == "free" and not comped:
             await self._reply(update, text, reply_markup=ui.plans_keyboard(
-                self._trial_eligible(chat_id)))
+                self._trial_eligible(chat_id), self.service.trial_days()))
         else:
             await self._reply(update, text)
 
@@ -805,10 +858,11 @@ class Bot:
         watches = self.service.list_watches(chat_id)
         pilot = self.service.autopilots.get(str(chat_id))
         text = msg.account_text(status, len(watches), pilot is not None,
-                                comped=comped)
+                                comped=comped, trial_days=self.service.trial_days())
         if status["plan"] == "free" and not comped:
             await self._edit_or_send(
-                query, text, ui.plans_keyboard(self._trial_eligible(chat_id)))
+                query, text, ui.plans_keyboard(self._trial_eligible(chat_id),
+                                               self.service.trial_days()))
         else:
             await self._edit_or_send(query, text)
 
@@ -817,8 +871,11 @@ class Bot:
         if not plan:
             return
         chat_id = update.effective_chat.id
+        usd, _stars, pct = self._offer(chat_id, plan)
+        price = (f"<s>${plan['usd']:.2f}</s> <b>${usd:.2f}</b> ({pct}% off)"
+                 if pct else f"${usd:.2f}")
         text = (f"\U0001f48e <b>EzyAi PRO \u2014 {plan['label']}</b> "
-                f"${plan['usd']:.2f}\nHow would you like to pay?")
+                f"{price}\nHow would you like to pay?")
         kb = ui.pay_methods_keyboard(tier)
         if query is not None:
             await self._edit_or_send(query, text, kb)
@@ -829,13 +886,15 @@ class Bot:
         from telegram import LabeledPrice
         plan = billing.tier(tier)
         chat_id = update.effective_chat.id
+        _usd, stars, pct = self._offer(chat_id, plan)
+        label = f"{plan['label']} ({pct}% off)" if pct else plan["label"]
         try:
             await ctx.bot.send_invoice(
                 chat_id, f"EzyAi PRO \u2014 {plan['label']}",
                 "Live alerts, autopilot signals, deep research.",
                 billing.encode_payload(tier, "stars", chat_id),
                 provider_token="", currency="XTR",
-                prices=[LabeledPrice(plan["label"], plan["stars"])])
+                prices=[LabeledPrice(label, stars)])
         except Exception as exc:
             logger.warning("stars invoice failed: %s", exc)
             text = ("Stars checkout hiccup \u2014 please try again or use card/USDT.")
@@ -857,20 +916,30 @@ class Bot:
             else:
                 await self._reply(update, text)
             return
+        usd, _stars, pct = self._offer(chat_id, plan)
         try:
             import stripe  # lazy: only card payers touch it
             stripe.api_key = key
-            session = stripe.checkout.Session.create(**billing.stripe_session_params(
-                tier, chat_id,
-                success_url=f"https://t.me/{username}?start=paid",
-                cancel_url=f"https://t.me/{username}?start=cancelled"))
+
+            def create_session():
+                if pct:
+                    billing.ensure_coupon(pct)
+                return stripe.checkout.Session.create(**billing.stripe_session_params(
+                    tier, chat_id,
+                    success_url=f"https://t.me/{username}?start=paid",
+                    cancel_url=f"https://t.me/{username}?start=cancelled",
+                    percent=pct))
+
+            # Stripe calls are blocking HTTP: keep them off the event loop.
+            session = await asyncio.to_thread(create_session)
             url = session.get("url") if isinstance(session, dict) else session.url
             kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton(f"\U0001f4b3 Pay ${plan['usd']:.2f} now", url=url)],
+                InlineKeyboardButton(f"\U0001f4b3 Pay ${usd:.2f} now", url=url)],
                 [InlineKeyboardButton("\u2715 Cancel", callback_data="ezy:cancel")],
             ])
+            off = f" ({pct}% off applied)" if pct else ""
             text = (f"\U0001f4b3 <b>EzyAi PRO \u2014 {plan['label']}</b> "
-                    f"${plan['usd']:.2f}\nTap below to check out securely with Stripe. "
+                    f"${usd:.2f}{off}\nTap below to check out securely with Stripe. "
                     "PRO activates automatically.")
             if query is not None:
                 await self._edit_or_send(query, text, kb)
@@ -896,7 +965,9 @@ class Bot:
             else:
                 await self._reply(update, text)
             return
-        text = (f"\u20ae Send exactly <b>${plan['usd']:.2f} USDT</b> (TRC-20) to:\n"
+        usd, _stars, pct = self._offer(update.effective_chat.id, plan)
+        off = f" ({pct}% off applied)" if pct else ""
+        text = (f"\u20ae Send exactly <b>${usd:.2f} USDT</b>{off} (TRC-20) to:\n"
                 f"<code>{address}</code>\n"
                 "Then tap below \u2014 an admin approves within a few hours.")
         kb = InlineKeyboardMarkup([[
@@ -907,6 +978,10 @@ class Bot:
             await self._edit_or_send(query, text, kb)
         else:
             await self._reply(update, text, reply_markup=kb)
+
+    def _usdt_expected(self, chat_id, plan):
+        usd, _stars, pct = self._offer(chat_id, plan)
+        return f"${usd:.2f}" + (f" ({pct}% off)" if pct else "")
 
     async def _submit_usdt_claim(self, update, ctx, txid):
         flow = self._get_flow(ctx)
@@ -932,7 +1007,7 @@ class Bot:
             await ctx.bot.send_message(
                 admin_id,
                 f"\U0001f4b0 USDT claim: <b>{escape(name)}</b> (id <code>{chat_id}</code>)\n"
-                f"claims <b>{plan['label']}</b> \u2014 ${plan['usd']:.2f}\n"
+                f"claims <b>{plan['label']}</b> \u2014 {self._usdt_expected(chat_id, plan)}\n"
                 f"TXID: <code>{escape(txid)}</code>\n"
                 "Approve after checking the network.",
                 parse_mode=ParseMode.HTML,
@@ -978,6 +1053,7 @@ class Bot:
                                       "taking a moment \u2014 the team has been "
                                       "notified and will confirm shortly.")
             return
+        self.service.consume_discount(info["chat_id"])
         logger.info("stars PRO activated chat=%s tier=%s charge=%s",
                     info["chat_id"], info["tier"], charge_id)
         date = _fmt_date(until)
@@ -1346,6 +1422,7 @@ class Bot:
                         query, "Could not save the activation \u2014 state file "
                                "problem. Fix storage and tap Approve again.")
                     return
+                self.service.consume_discount(target)
                 logger.info("admin approved PRO %s for %s until %s",
                             cb["tier"], target, until)
                 date = _fmt_date(until)
@@ -1398,7 +1475,7 @@ class Bot:
             await ctx.bot.send_photo(
                 admin_id, file_id,
                 caption=(f"\U0001f4b0 USDT claim: <b>{escape(name)}</b> (id <code>{chat_id}</code>)\n"
-                         f"claims <b>{plan['label']}</b> \u2014 ${plan['usd']:.2f}\n"
+                         f"claims <b>{plan['label']}</b> \u2014 {self._usdt_expected(chat_id, plan)}\n"
                          "Proof screenshot below. Approve after checking."),
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([[

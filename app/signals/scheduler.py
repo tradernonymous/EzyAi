@@ -32,6 +32,9 @@ ALERT_THROTTLE_S = 600
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 CODE_DEFAULT_DAYS = 90
 CODE_MAX_BATCH = 50
+CODE_KINDS = ("gift", "trial", "discount")
+TRIAL_DAYS_MAX = 30
+DISCOUNT_MAX_PERCENT = 90
 
 
 class StateError(RuntimeError):
@@ -62,6 +65,7 @@ class Service:
         self._paid_set = set()
         self.users = {}  # lowercased telegram username -> chat_id
         self.codes = {}  # gift codes minted by the admin: code -> record
+        self.settings = {}  # admin-tunable knobs (trial_days), persisted
         self.pro_ids = {int(i) for i in pro_ids}
         self.admin_id = admin_id
         # Best-effort operator notification: callable(text). Set by main.
@@ -141,6 +145,20 @@ class Service:
             return True
         return cid in self.pro_ids
 
+    # -- settings -----------------------------------------------------------
+    def trial_days(self):
+        try:
+            return int(self.settings.get("trial_days", constants.TRIAL_DAYS))
+        except (TypeError, ValueError):
+            return constants.TRIAL_DAYS
+
+    def set_trial_days(self, days):
+        days = max(1, min(int(days), TRIAL_DAYS_MAX))
+        with self._lock:
+            self.settings["trial_days"] = days
+            self._save()
+            return days
+
     def start_trial(self, chat_id):
         with self._lock:
             rec = self._plan_rec(chat_id)
@@ -148,10 +166,74 @@ class Service:
                 return None
             rec["trial_used"] = True
             rec["plan"] = "trial"
-            rec["until"] = time.time() + constants.TRIAL_DAYS * 86400
+            rec["until"] = time.time() + self.trial_days() * 86400
             rec["nudged"] = False
             self._save()
             return rec["until"]
+
+    def grant_days(self, chat_id, days, event_id=None):
+        """Extend PRO by a number of days (trial codes). Same idempotency
+        and rollback rules as activate_pro; the one-time free trial flag is
+        untouched."""
+        days = max(1, min(int(days), 366))
+        with self._lock:
+            if event_id:
+                event_id = str(event_id)
+                if event_id in self._paid_set:
+                    return self._plan_rec(chat_id).get("until", 0.0)
+            now = time.time()
+            rec = self._plan_rec(chat_id)
+            snapshot = dict(rec)
+            base = now
+            if rec["plan"] in ("trial", "pro"):
+                base = max(now, float(rec.get("until", 0.0)))
+            rec["plan"] = "pro"
+            rec["until"] = base + days * 86400
+            rec["nudged"] = False
+            if event_id:
+                self.paid_events.append(event_id)
+                self._paid_set.add(event_id)
+            try:
+                self._save()
+            except StateError:
+                rec.clear()
+                rec.update(snapshot)
+                if event_id and event_id in self._paid_set:
+                    self._paid_set.discard(event_id)
+                    if self.paid_events and self.paid_events[-1] == event_id:
+                        self.paid_events.pop()
+                raise
+            return rec["until"]
+
+    # -- discounts (set by a discount code, spent by the next purchase) -------
+    def discount_for(self, chat_id):
+        """Live {code, percent, expires_at} for this chat, else None."""
+        with self._lock:
+            rec = self._plan_rec(chat_id)
+            d = rec.get("discount")
+            if not d:
+                return None
+            if d.get("expires_at", 0) <= time.time():
+                rec.pop("discount", None)
+                self._try_save()
+                return None
+            return dict(d)
+
+    def set_discount(self, chat_id, code, percent, expires_at):
+        with self._lock:
+            rec = self._plan_rec(chat_id)
+            rec["discount"] = {"code": code, "percent": int(percent),
+                               "expires_at": float(expires_at)}
+            self._save()
+
+    def consume_discount(self, chat_id):
+        """Remove the chat's discount after a purchase. Returns it or None."""
+        with self._lock:
+            rec = self._plan_rec(chat_id)
+            d = rec.pop("discount", None)
+            if d:
+                self._try_save()
+            return d
 
     def activate_pro(self, chat_id, months, event_id=None):
         """Extend PRO by calendar months. event_id makes payment webhooks
@@ -256,12 +338,28 @@ class Service:
         body = "".join(secrets.choice(CODE_ALPHABET) for _ in range(8))
         return f"EZY-{body[:4]}-{body[4:]}"
 
-    def mint_codes(self, tier, count=1, uses=1, days=CODE_DEFAULT_DAYS, created_by=None):
-        """Create gift codes for a plan tier. Each code grants that tier's
-        months `uses` times before it is spent, and expires after `days`."""
-        plan = constants.PLANS.get(tier)
-        if not plan:
-            raise ValueError(f"unknown tier {tier!r}")
+    def mint_codes(self, tier=None, count=1, uses=1, days=CODE_DEFAULT_DAYS,
+                   created_by=None, kind="gift", value=None):
+        """Create codes. kind:
+          gift     - `tier` names a plan; grants that plan's months.
+          trial    - `value` days of PRO.
+          discount - `value` percent off the next purchase.
+        Each code can be used `uses` times and expires after `days`."""
+        if kind not in CODE_KINDS:
+            raise ValueError(f"unknown code kind {kind!r}")
+        base = {"kind": kind}
+        if kind == "gift":
+            plan = constants.PLANS.get(tier)
+            if not plan:
+                raise ValueError(f"unknown tier {tier!r}")
+            base.update({"tier": tier, "months": int(plan["months"])})
+        elif kind == "trial":
+            base["days"] = max(1, min(int(value or 0), 366))
+        else:
+            pct = int(value or 0)
+            if not 1 <= pct <= DISCOUNT_MAX_PERCENT:
+                raise ValueError("percent must be 1-90")
+            base["percent"] = pct
         count = max(1, min(int(count), CODE_MAX_BATCH))
         uses = max(1, min(int(uses), 1000))
         now = time.time()
@@ -271,11 +369,10 @@ class Service:
                 code = self._new_code()
                 if code in self.codes:
                     continue
-                self.codes[code] = {
-                    "tier": tier, "months": int(plan["months"]),
+                self.codes[code] = dict(base, **{
                     "uses_left": uses, "expires_at": now + max(1, int(days)) * 86400,
                     "created_at": now, "created_by": created_by, "redeemed": [],
-                }
+                })
                 out.append(code)
             self._save()
             return out
@@ -297,8 +394,16 @@ class Service:
                 return "used", None
             rec["uses_left"] -= 1
             rec.setdefault("redeemed", []).append(cid)
+            kind = rec.get("kind", "gift")
+            event_id = f"code:{code}:{cid}"
             try:
-                until = self.activate_pro(cid, rec["months"], event_id=f"code:{code}:{cid}")
+                if kind == "trial":
+                    until = self.grant_days(cid, rec["days"], event_id=event_id)
+                    return "ok", until
+                if kind == "discount":
+                    self.set_discount(cid, code, rec["percent"], rec.get("expires_at", 0))
+                    return "ok_discount", rec["percent"]
+                until = self.activate_pro(cid, rec["months"], event_id=event_id)
             except StateError:
                 rec["uses_left"] += 1
                 rec["redeemed"].remove(cid)
@@ -423,6 +528,8 @@ class Service:
         self.users = users
         codes = data.get("codes") or {}
         self.codes = {str(k): v for k, v in codes.items() if isinstance(v, dict)}
+        settings = data.get("settings") or {}
+        self.settings = settings if isinstance(settings, dict) else {}
         self.plans = plans
         daily = data.get("daily") or {}
         self.daily_counters = daily if isinstance(daily, dict) else {}
@@ -443,6 +550,7 @@ class Service:
             "paid_events": self.paid_events[-PAID_EVENTS_MAX:],
             "users": self.users,
             "codes": self.codes,
+            "settings": self.settings,
         }
 
     def _save(self):

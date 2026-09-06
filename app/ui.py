@@ -276,16 +276,19 @@ def refresh_keyboard():
     ]])
 
 
-def plans_keyboard(trial_eligible):
+def plans_keyboard(trial_eligible, trial_days=None, percent=0):
+    from . import billing as _b
     from . import constants as _c
+    days = trial_days or _c.TRIAL_DAYS
     rows = []
     if trial_eligible:
         rows.append([InlineKeyboardButton(
-            f"\U0001f381 {_c.TRIAL_DAYS}-day free trial",
+            f"\U0001f381 {days}-day free trial",
             callback_data="ezy:trial")])
     for tid in _c.PLAN_ORDER:
         p = _c.PLANS[tid]
-        label = f"\U0001f48e {p['label']} \u2014 ${p['usd']:.2f}"
+        usd = _b.discounted_usd(p["usd"], percent) if percent else p["usd"]
+        label = f"\U0001f48e {p['label']} \u2014 ${usd:.2f}"
         if p["badge"]:
             label += f" \u2b50 {p['badge']}"
         rows.append([InlineKeyboardButton(label, callback_data=cb_tier(tid))])

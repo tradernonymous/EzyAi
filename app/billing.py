@@ -44,9 +44,40 @@ def duration_days(tier_id):
     return constants.PLANS[tier_id]["months"] * 30
 
 
-def stripe_session_params(tier_id, chat_id, success_url, cancel_url):
-    """Checkout Session kwargs with dynamic price_data (no preset Price ID)."""
+def discounted_usd(usd, percent):
+    return round(float(usd) * (100 - int(percent or 0)) / 100.0, 2)
+
+
+def discounted_stars(stars, percent):
+    """Telegram requires at least 1 star."""
+    return max(1, int(round(int(stars) * (100 - int(percent or 0)) / 100.0)))
+
+
+def coupon_id(percent):
+    """Deterministic Stripe coupon id per percentage, reused across checkouts."""
+    return f"ezyai_off_{int(percent)}"
+
+
+def ensure_coupon(percent):
+    """Create the percent-off coupon in Stripe once; return its id.
+    Requires stripe.api_key to be set by the caller."""
+    import stripe  # lazy: billing stays import-light
+    cid = coupon_id(percent)
+    try:
+        stripe.Coupon.retrieve(cid)
+    except Exception:
+        stripe.Coupon.create(id=cid, percent_off=int(percent), duration="once",
+                             name=f"EzyAi {int(percent)}% off")
+    return cid
+
+
+def stripe_session_params(tier_id, chat_id, success_url, cancel_url, percent=0):
+    """Checkout Session kwargs with dynamic price_data (no preset Price ID).
+    With `percent`, the bot's own discount coupon is applied; Stripe forbids
+    combining that with the promotion-code field, so the field is dropped."""
     plan = constants.PLANS[tier_id]
+    extra = ({"discounts": [{"coupon": coupon_id(percent)}]} if percent
+             else {"allow_promotion_codes": True})
     return {
         "mode": "payment",
         "line_items": [{
@@ -58,11 +89,9 @@ def stripe_session_params(tier_id, chat_id, success_url, cancel_url):
             "quantity": 1,
         }],
         "metadata": {"order": encode_payload(tier_id, "card", chat_id)},
-        # Shows the "Add promotion code" field on the Checkout page. Coupons
-        # and promotion codes are managed in the Stripe Dashboard.
-        "allow_promotion_codes": True,
         "success_url": success_url,
         "cancel_url": cancel_url,
+        **extra,
     }
 
 
@@ -99,4 +128,7 @@ def fulfill_checkout_session(session, service, event_id=None):
         return None
     months = constants.PLANS[info["tier"]]["months"]
     until = service.activate_pro(info["chat_id"], months, event_id=event_id)
+    consume = getattr(service, "consume_discount", None)
+    if consume is not None:
+        consume(info["chat_id"])
     return info["chat_id"], info["tier"], until

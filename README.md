@@ -61,11 +61,20 @@ every result.
   - *Discounts on card checkout*: create a coupon and a promotion code in the
     Stripe Dashboard (Products → Coupons → New → Promotion code). The bot's
     Checkout page shows an "Add promotion code" field, so nothing else is needed.
-  - *Free PRO time*: the admin mints gift codes in Telegram with
-    `/mkcode TIER [COUNT] [USES] [DAYS]` (for example `/mkcode 1mo 5` makes five
-    single-use one-month codes valid 90 days). `/codes` lists live codes,
-    `/revokecode CODE` kills one. Customers activate with `/redeem CODE`; the
-    bot checks its own gift codes before asking the website.
+  - *Codes minted in Telegram by the admin* (`/codes` lists live ones,
+    `/revokecode CODE` kills one; customers activate with `/redeem CODE`, and
+    the bot checks its own codes before asking the website):
+    - `/mkcode 1mo [COUNT] [USES] [VALID_DAYS]` free months, e.g. `/mkcode 1mo 5`
+      makes five single-use one-month codes valid 90 days.
+    - `/mkcode trial DAYS [COUNT] [USES] [VALID_DAYS]` free PRO days, e.g.
+      `/mkcode trial 7 10`.
+    - `/mkcode off PERCENT [COUNT] [USES] [VALID_DAYS]` a percentage off the
+      customer's next purchase, e.g. `/mkcode off 20 50` for fifty 20%-off
+      codes. Once redeemed, `/plans`, Stars, card and USDT all show the reduced
+      price; the discount is spent by the next completed purchase (card via a
+      Stripe coupon the bot creates, `ezyai_off_<percent>`).
+  - *Default free trial length*: `/settrial DAYS` (1-30) changes it live for
+    new accounts; `/settrial` shows the current value.
 - Expiry auto-downgrades; watches stay stored and resume on PRO.
   Env: `STRIPE_API_KEY`, `STRIPE_WEBHOOK_SECRET`, `BOT_USERNAME`,
   `USDT_ADDRESS`, `ADMIN_TELEGRAM_ID`, `PRO_ACCESS_IDS`
