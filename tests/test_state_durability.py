@@ -223,3 +223,48 @@ def test_restored_watches_are_spread_after_restart(tmp_path):
     now = time.time()
     ages = [now - ts for ts in svc2.last_check.values()]
     assert len(ages) == 5 and all(0 <= a <= 300 for a in ages)
+
+
+# -- gift codes ------------------------------------------------------------------
+
+def test_mint_and_redeem_gift_code(tmp_path):
+    svc = _svc(tmp_path)
+    codes = svc.mint_codes("1mo", 2, uses=1, days=30, created_by=1)
+    assert len(codes) == 2 and all(c.startswith("EZY-") and len(c) == 13 for c in codes)
+    assert not any(ch in "O0I1" for c in codes for ch in c[4:])
+    status, until = svc.redeem_local_code(55, codes[0])
+    assert status == "ok" and svc.is_pro(55)
+    # same chat again: idempotent, no second period
+    assert svc.redeem_local_code(55, codes[0]) == ("already", until)
+    # single use: a different chat is refused
+    assert svc.redeem_local_code(56, codes[0])[0] == "used"
+    assert svc.redeem_local_code(56, "EZY-ZZZZ-ZZZZ")[0] == "not_found"
+    # persisted
+    svc2 = Service(object(), tmp_path / "state.json")
+    assert svc2.codes[codes[0]]["redeemed"] == [55]
+    assert svc2.redeem_local_code(57, codes[1])[0] == "ok"
+
+
+def test_gift_code_multi_use_expiry_and_revoke(tmp_path):
+    svc = _svc(tmp_path)
+    (multi,) = svc.mint_codes("6mo", 1, uses=2)
+    assert svc.redeem_local_code(1, multi)[0] == "ok"
+    assert svc.redeem_local_code(2, multi)[0] == "ok"
+    assert svc.redeem_local_code(3, multi)[0] == "used"
+    (old,) = svc.mint_codes("1mo", 1)
+    svc.codes[old]["expires_at"] = time.time() - 1
+    assert svc.redeem_local_code(4, old)[0] == "expired"
+    (gone,) = svc.mint_codes("1mo", 1)
+    assert svc.revoke_code(gone) and not svc.revoke_code(gone)
+    assert svc.redeem_local_code(5, gone)[0] == "not_found"
+    live = [c for c, _, _ in svc.list_codes()]
+    assert live == [] or all(c not in (multi, old, gone) for c in live)
+
+
+def test_gift_code_rolls_back_when_save_fails(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    (code,) = svc.mint_codes("1mo", 1)
+    monkeypatch.setattr(sched.os, "replace", lambda *a, **k: (_ for _ in ()).throw(OSError("full")))
+    with pytest.raises(StateError):
+        svc.redeem_local_code(9, code)
+    assert svc.codes[code]["uses_left"] == 1 and svc.codes[code]["redeemed"] == []

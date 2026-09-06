@@ -281,6 +281,8 @@ def test_stripe_session_params_dynamic():
         "1mo", 1, "s", "c")["line_items"][0]["price_data"]["unit_amount"] == 1499
     assert billing.stripe_session_params(
         "12mo", 1, "s", "c")["line_items"][0]["price_data"]["unit_amount"] == 9999
+    # Stripe Checkout shows its "Add promotion code" field only with this flag
+    assert billing.stripe_session_params("1mo", 1, "s", "c")["allow_promotion_codes"] is True
 
 
 class _FakeService:

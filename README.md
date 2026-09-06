@@ -57,6 +57,15 @@ every result.
   `EZYAI_ENTITLEMENT_KEY`; empty disables the feature). Site contract for
   codes: `GET /api/public/ezyai/entitlements?code=<code>` returns the
   unclaimed row with that `redeem_code`. See `app/site_entitlements.py`.
+- **Promo and gift codes**: two kinds.
+  - *Discounts on card checkout*: create a coupon and a promotion code in the
+    Stripe Dashboard (Products → Coupons → New → Promotion code). The bot's
+    Checkout page shows an "Add promotion code" field, so nothing else is needed.
+  - *Free PRO time*: the admin mints gift codes in Telegram with
+    `/mkcode TIER [COUNT] [USES] [DAYS]` (for example `/mkcode 1mo 5` makes five
+    single-use one-month codes valid 90 days). `/codes` lists live codes,
+    `/revokecode CODE` kills one. Customers activate with `/redeem CODE`; the
+    bot checks its own gift codes before asking the website.
 - Expiry auto-downgrades; watches stay stored and resume on PRO.
   Env: `STRIPE_API_KEY`, `STRIPE_WEBHOOK_SECRET`, `BOT_USERNAME`,
   `USDT_ADDRESS`, `ADMIN_TELEGRAM_ID`, `PRO_ACCESS_IDS`

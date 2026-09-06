@@ -58,6 +58,9 @@ def stripe_session_params(tier_id, chat_id, success_url, cancel_url):
             "quantity": 1,
         }],
         "metadata": {"order": encode_payload(tier_id, "card", chat_id)},
+        # Shows the "Add promotion code" field on the Checkout page. Coupons
+        # and promotion codes are managed in the Stripe Dashboard.
+        "allow_promotion_codes": True,
         "success_url": success_url,
         "cancel_url": cancel_url,
     }
