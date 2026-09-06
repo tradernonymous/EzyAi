@@ -312,3 +312,12 @@ PLANS = {
              "save": "save 44%", "badge": None},
 }
 PLAN_ORDER = ("1mo", "6mo", "12mo")
+
+# Longest single grant accepted from any payment path (site rows included).
+MAX_PLAN_MONTHS = 24
+# Per-chat caps so one account cannot monopolise the scheduler or flood
+# itself with alerts.
+MAX_WATCHES = 10
+WATCH_DAILY_LIMIT = 30
+# Per-chat command budget (commands + button taps) per minute.
+RATE_LIMIT_PER_MINUTE = 20
