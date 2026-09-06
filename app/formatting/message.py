@@ -69,10 +69,11 @@ def analysis_report(a):
         lines.append(f"Stop loss : <b>{price(spec['sl'])}</b>")
         lines.append(f"Take profit 1: <b>{price(spec['tp1'])}</b> \u00b7 Take profit 2: <b>{price(spec['tp2'])}</b>")
         lines.append(f"Risk/reward {spec['rr']:.1f} \u00b7 Risk/trade {spec['risk_pct']:.1f}% of capital")
-        lines.append(f"Confidence: <b>{a['confidence']:.0f}/100</b> {meter(a['confidence'])}")
+        lines.append(f"Setup score: <b>{a['confidence']:.0f}/100</b> {meter(a['confidence'])} "
+                     "(aligned indicators, not a win probability)")
     else:
         lines.append(f"<b>Signal</b>: {BADGE[a['side']]} No trade setup \u2014 trend {trend['direction']}, "
-                     f"confidence {a['confidence']:.0f}/100 {meter(a['confidence'])}")
+                     f"setup score {a['confidence']:.0f}/100 {meter(a['confidence'])}")
     lines.append("")
 
     if a["reasons"]:
@@ -104,7 +105,7 @@ def signal_message(sig, source="watch"):
     lines.append(f"Entry zone: <b>{price(sig['entry_zone'][0])}</b> \u2013 <b>{price(sig['entry_zone'][1])}</b>")
     lines.append(f"Stop loss : <b>{price(sig['sl'])}</b> \u00b7 RR target {sig['rr']:.1f}")
     lines.append(f"TP1: <b>{price(sig['tp1'])}</b> \u00b7 TP2: <b>{price(sig['tp2'])}</b> \u00b7 "
-                 f"Risk {sig['risk_pct']:.1f}% \u00b7 Confidence {sig['confidence']:.0f}% {meter(sig['confidence'])}")
+                 f"Risk {sig['risk_pct']:.1f}% \u00b7 Setup score {sig['confidence']:.0f}/100 {meter(sig['confidence'])}")
     sup = " / ".join(price(s) for s in (sig.get("support") or [])) or "-"
     res = " / ".join(price(r) for r in (sig.get("resistance") or [])) or "-"
     lines.append(f"Levels \u2014 support: {sup} \u00b7 resistance: {res}")
@@ -569,6 +570,20 @@ def site_pro_activated_text(row, until):
             "your watches resume automatically. Enjoy!")
 
 
+REDEEM_TEXT = {
+    "disabled": "Website codes are not enabled on this bot yet.",
+    "bad_format": ("That doesn't look like a PRO code. Codes look like "
+                   "<code>EZY-AB12-CD34</code> \u2014 copy it from the printezy.money "
+                   "success page or your receipt email."),
+    "not_found": ("Code not found or already used. Check for typos, or contact "
+                  "support with your receipt if you're sure it's right."),
+    "already": "That code was already redeemed on this account \u2014 PRO is active.",
+    "error": "Could not reach printezy.money right now \u2014 try again in a minute.",
+    "prompt": ("\U0001f39f Paste your PRO code from printezy.money "
+               "(looks like <code>EZY-AB12-CD34</code>):"),
+}
+
+
 def plans_text(trial_eligible):
     from .. import billing as _b
     from .. import constants as _c
@@ -702,6 +717,7 @@ def help_text():
         "\U0001f464 <b>Account</b>\n"
         "/plans \u2014 trial and PRO plans\n"
         "/account \u2014 plan, watches and autopilot status\n"
+        "/redeem CODE \u2014 activate PRO bought on printezy.money\n"
         "/dashboard \u2014 everything at a glance\n"
         "/help \u2014 this message\n\n"
         "Examples: crypto BTCUSD \u00b7 forex EURUSD \u00b7 stock AAPL \u00b7 cfd XAUUSD\n"

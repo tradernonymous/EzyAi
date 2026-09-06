@@ -98,3 +98,13 @@ def health_stale_s():
         return int(env("EZYAI_HEALTH_STALE_S", "180"))
     except ValueError:
         return 180
+
+
+def site_username_match():
+    """Claim website purchases by Telegram username (legacy). Turn off once
+    the site issues redeem codes: handles can change owners."""
+    return env("EZYAI_SITE_USERNAME_MATCH", "true").lower() in ("1", "true", "yes", "on")
+
+
+def sentry_dsn():
+    return env("SENTRY_DSN", "")

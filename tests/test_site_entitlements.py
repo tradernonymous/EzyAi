@@ -99,3 +99,60 @@ def test_invalid_rows_are_dropped():
     assert not se._valid({"id": "a", "stripe_session_id": "cs", "months": 0})
     assert not se._valid({"id": "a", "months": 1})
     assert not se._valid("junk")
+
+
+# -- redeem codes ---------------------------------------------------------------
+
+class CodeClient(FakeClient):
+    def fetch_by_code(self, code):
+        return [r for r in self.rows if r.get("redeem_code") == code]
+
+
+def _coded(i, code, months=6):
+    row = _row(i, handle="nobody", months=months)
+    row["redeem_code"] = code
+    return row
+
+
+def test_normalize_code_tolerates_user_input():
+    assert se.normalize_code("ezy-ab12-cd34") == "EZY-AB12-CD34"
+    assert se.normalize_code(" EZY AB12 CD34 ") == "EZY-AB12-CD34"
+    assert se.normalize_code("ab12cd34") == "EZY-AB12-CD34"
+    assert se.normalize_code("EZY-AB1O-CDI4") == "EZY-AB10-CD14"  # O/0, I/1 folded
+    assert se.normalize_code("EZY-AB12-CD34-EF56") == "EZY-AB12-CD34-EF56"
+    for bad in ("", "abc", "EZY-AB12", "EZY-AB12-CD3", "<b>x</b>", "A" * 40):
+        assert se.normalize_code(bad) is None
+
+
+def test_redeem_code_grants_once_and_claims(tmp_path):
+    svc = _svc(tmp_path)
+    client = CodeClient([_coded(1, "EZY-AB12-CD34")])
+    status, granted = se.redeem_code(client, svc, 555, "ezy ab12 cd34")
+    assert status == "ok" and len(granted) == 1
+    assert svc.is_pro(555)
+    assert client.claims == [(_coded(1, "x")["id"], 555)]
+    until = svc.plan_status(555)["until"]
+    # same code again: no second period, clear status
+    client.rows = [_coded(1, "EZY-AB12-CD34")]  # site failed to mark claimed
+    status, granted = se.redeem_code(client, svc, 555, "EZY-AB12-CD34")
+    assert status == "already" and granted == []
+    assert svc.plan_status(555)["until"] == until
+
+
+def test_redeem_code_statuses(tmp_path):
+    svc = _svc(tmp_path)
+    client = CodeClient([])
+    assert se.redeem_code(client, svc, 1, "abc")[0] == "bad_format"
+    assert se.redeem_code(client, svc, 1, "EZY-ZZZZ-ZZZZ")[0] == "not_found"
+
+    class Down(CodeClient):
+        def fetch_by_code(self, code):
+            raise RuntimeError("503")
+
+    assert se.redeem_code(Down([]), svc, 1, "EZY-AB12-CD34")[0] == "error"
+
+    class Off(CodeClient):
+        enabled = False
+
+    assert se.redeem_code(Off([]), svc, 1, "EZY-AB12-CD34")[0] == "disabled"
+    assert not svc.is_pro(1)

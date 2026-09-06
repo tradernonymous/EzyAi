@@ -45,13 +45,18 @@ every result.
   The two lists are independent.
 - **Website card checkout**: PRO can also be bought on
   [printezy.money/ezyai](https://printezy.money/ezyai) (the site's own
-  Stripe checkout, typed Telegram username). The site records an
-  entitlement; this bot claims it for that handle on `/start`, `/plans`,
-  `/account`, any PRO gate, and a 2-minute background sweep over handles
-  it has already seen — activation is idempotent on the Stripe session id.
-  Env: `EZYAI_SITE_URL` (default `https://printezy.money`) and
-  `EZYAI_SITE_KEY` (must equal the site's `EZYAI_ENTITLEMENT_KEY`; empty
-  disables the feature). See `app/site_entitlements.py`.
+  Stripe checkout). The site records an entitlement; the buyer activates it
+  with `/redeem CODE` using the one-time code shown on the success page and
+  in the receipt email (format `EZY-AB12-CD34`; the bot tolerates spaces,
+  lowercase and O/0, I/1 mix-ups, and allows 5 attempts per hour per chat).
+  Activation is idempotent on the Stripe session id. The older path that
+  matched purchases by typed Telegram username still runs by default; set
+  `EZYAI_SITE_USERNAME_MATCH=false` once the site issues codes, because a
+  handle can change owners. Env: `EZYAI_SITE_URL` (default
+  `https://printezy.money`) and `EZYAI_SITE_KEY` (must equal the site's
+  `EZYAI_ENTITLEMENT_KEY`; empty disables the feature). Site contract for
+  codes: `GET /api/public/ezyai/entitlements?code=<code>` returns the
+  unclaimed row with that `redeem_code`. See `app/site_entitlements.py`.
 - Expiry auto-downgrades; watches stay stored and resume on PRO.
   Env: `STRIPE_API_KEY`, `STRIPE_WEBHOOK_SECRET`, `BOT_USERNAME`,
   `USDT_ADDRESS`, `ADMIN_TELEGRAM_ID`, `PRO_ACCESS_IDS`
@@ -151,6 +156,13 @@ Then `/start` your bot in Telegram. State (watches/autopilots) is kept on the
   bot starts with saves disabled and alerts the admin rather than overwriting
   the broken file with empty state.
 - `/export` (admin only) DMs the current state file as an off-box backup.
+  Fly also keeps daily volume snapshots for 14 days (`snapshot_retention` in
+  `fly.toml`); list them with `fly volumes snapshots list <volume-id>`.
+- Set `SENTRY_DSN` to ship errors to Sentry; nothing is sent when it is empty.
+- The image runs the bot as the unprivileged `ezy` user;
+  `docker-entrypoint.py` hands the `/data` volume to that user at start.
+- Dependencies are pinned in `requirements.lock`; after editing
+  `requirements.txt`, run `scripts/lock.sh` and commit both.
 - Set `EZYAI_CONTACT_EMAIL` so SEC EDGAR requests carry the contact address its
   fair-access policy requires; without it fundamentals for stocks may be blocked.
 - The admin (`ADMIN_TELEGRAM_ID`) receives alerts for: state save failures,

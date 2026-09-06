@@ -64,6 +64,7 @@ COMMANDS = (
     ("dashboard", "Status overview + shortcuts"),
     ("plans", "PRO plans + free trial"),
     ("account", "Your plan and usage"),
+    ("redeem", "Redeem a PRO code from printezy.money"),
     ("help", "How to use EzyAi"),
 )
 

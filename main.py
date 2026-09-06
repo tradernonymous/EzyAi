@@ -193,6 +193,26 @@ def start_webhook_server(service, bot_app):
     return server
 
 
+def init_sentry():
+    """Optional error reporting: on only when SENTRY_DSN is set."""
+    dsn = config.sentry_dsn()
+    if not dsn:
+        return
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.logging import LoggingIntegration
+        sentry_sdk.init(
+            dsn=dsn, send_default_pii=False, traces_sample_rate=0.0,
+            integrations=[LoggingIntegration(level=logging.INFO,
+                                             event_level=logging.ERROR)],
+            release=os.environ.get("FLY_IMAGE_REF") or None,
+            environment=os.environ.get("FLY_APP_NAME") or "local",
+        )
+        logger.info("sentry enabled")
+    except Exception as exc:
+        logger.warning("sentry init failed: %s", exc)
+
+
 def check_optional_deps():
     """Fail at boot, not at the first payment, when a paid-path dependency
     is missing from the image."""
@@ -223,6 +243,8 @@ def main():
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
 
+    init_sentry()
+
     token = config.telegram_token()
     if not token:
         print("=" * 60)
@@ -244,7 +266,8 @@ def main():
                           "stripe_key": config.stripe_api_key(),
                           "bot_username": config.bot_username(),
                           "site_url": config.site_url(),
-                          "site_key": config.site_key()})
+                          "site_key": config.site_key(),
+                          "site_username_match": config.site_username_match()})
     service.on_alert = lambda text: admin_alert(bot.app, text)
 
     start_webhook_server(service, bot.app)
