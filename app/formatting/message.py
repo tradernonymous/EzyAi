@@ -64,7 +64,9 @@ def analysis_report(a):
         lines.append(f"Support: {sup}  \u00b7  Resistance: {res}")
     sp = a.get("spread")
     if sp and sp.get("atr_ratio") is not None:
-        lines.append(f"Spread: {price(sp['latest'])} ({sp['atr_ratio']:.2f} ATR)")
+        est = " est." if sp.get("estimated") else ""
+        lines.append(f"Spread{est}: {price(sp['latest'])} "
+                     f"({sp['atr_ratio']:.2f} ATR)")
     lines.append("")
 
     if spec:
@@ -117,22 +119,17 @@ def signal_message(sig, source="watch"):
     if sig.get("data_source") == "synthetic" or sig.get("data_mode") == "demo":
         lines.append("\U0001f6a8 <b>DEMO DATA</b> \u2014 prices may be simulated. "
                      "Verify before acting.")
-    elif sig.get("data_source") == "oanda":
-        # 5B live BAM provenance: the real spread used to widen the stop,
-        # shown in price and as a fraction of the bar ATR so the reader can
-        # judge how expensive the entry is.
-        comp = sig.get("component_scores") or {}
-        atr = comp.get("atr")
+    elif sig.get("data_source") == "yahoo":
+        # Provenance: a delayed mid feed with no bid/ask, so the spread that
+        # widened the stop is an estimate, not a quote. Say so.
         sp = sig.get("spread_estimate")
-        if sp and atr:
-            lines.append(f"Feed: OANDA live \u00b7 spread {price(sp)} "
-                         f"({sp / atr:.2f} ATR)")
-        elif sp:
-            lines.append(f"Feed: OANDA live \u00b7 spread {price(sp)}")
+        if sp:
+            lines.append(f"Feed: Yahoo delayed \u00b7 spread assumed "
+                         f"{sp:.0f} bps \u00b7 verify with your broker")
         else:
-            lines.append("Feed: OANDA live")
+            lines.append("Feed: Yahoo delayed \u00b7 verify with your broker")
     elif sig.get("data_source") not in (None, "binance", "ccxt"):
-        lines.append(f"Data feed: {sig['data_source']}")
+        lines.append(f"Data feed: {e(str(sig['data_source']))}")
     lines.append(f"Entry zone: <b>{price(sig['entry_zone'][0])}</b> \u2013 <b>{price(sig['entry_zone'][1])}</b>")
     lines.append(f"Stop loss : <b>{price(sig['sl'])}</b> \u00b7 RR target {sig['rr']:.1f}")
     lines.append(f"TP1: <b>{price(sig['tp1'])}</b> \u00b7 TP2: <b>{price(sig['tp2'])}</b> \u00b7 "
@@ -751,7 +748,6 @@ def _age(seconds):
 
 
 SOURCE_LABEL = {
-    "oanda": "OANDA v3",
     "binance": "Binance",
     "ccxt": "ccxt",
     "yahoo": "Yahoo (delayed)",
@@ -763,31 +759,20 @@ def verify_feed_report(p):
     """Admin /verifyfeed: how one pair is actually served right now."""
     e = escape
     lines = [f"\U0001f4e1 <b>FEED CHECK</b> {e(p['pair'])} \u00b7 {e(p['tf'])}"]
+    lines.append(f"configured: <b>{p['static_tier']}</b> tier \u00b7 spread "
+                 f"estimate {p['spread_bps']} bps")
 
-    if p["oanda_enabled"]:
-        env = p.get("oanda_environment") or "live"
-        tail = p.get("oanda_key_tail") or "?"
-        lines.append(f"<b>OANDA</b> on \u00b7 {env} \u00b7 token {tail} \u00b7 "
-                     f"{e(p.get('oanda_base') or '')}")
-        if p.get("oanda_instrument"):
-            lines.append(f"\u2192 maps to <b>{e(p['oanda_instrument'])}</b>")
-        if p["oanda_ok"]:
-            lines.append(f"direct probe \u2705 \u00b7 latest bar "
-                         f"{_age(p['oanda_age_s'])} old")
-            if p.get("oanda_bam_ok"):
-                sp = p.get("oanda_spread")
-                spread_txt = price(sp) if sp is not None else "-"
-                lines.append(f"BAM bid/ask feed \u2705 \u00b7 live spread "
-                             f"{spread_txt}")
-            else:
-                lines.append("\u26a0\ufe0f BAM bid/ask data missing \u2014 "
-                             "scalping stays blocked on live FX/metals")
-        elif p.get("oanda_error"):
-            lines.append(f"direct probe \u274c \u00b7 {e(p['oanda_error'])}")
+    if p.get("window_label"):
+        if p.get("in_window"):
+            lines.append(f"session: \u2705 inside {e(p['window_label'])}")
+        else:
+            nxt = p.get("next_open")
+            tail = f" \u00b7 next open {e(nxt)}" if nxt else ""
+            lines.append(f"session: \u23f8 outside {e(p['window_label'])}{tail}")
+    elif p.get("scalp_class") == "crypto":
+        lines.append("session: 24/7 \u00b7 crypto never closes")
     else:
-        lines.append(f"<b>OANDA</b> off \u2014 set <code>OANDA_API_KEY</code> "
-                     f"+ <code>OANDA_ENVIRONMENT</code> and redeploy for live "
-                     f"FX/metals.")
+        lines.append("session: n/a \u00b7 this instrument is not scalped")
 
     if p.get("probe_error"):
         lines.append(f"feed probe failed: {e(p['probe_error'])}")
@@ -801,10 +786,6 @@ def verify_feed_report(p):
                      f"{_age(p['last_age_s'])} old")
     else:
         lines.append(f"freshness: \u274c {e(p['fresh_reason'] or 'FAIL')}")
-    if not p.get("oanda_ok") and p.get("oanda_instrument") and \
-            p["served_by"] == "yahoo":
-        lines.append("\u26a0\ufe0f OANDA probe failed \u2014 showing the Yahoo "
-                     "fallback; scalp alerts stay suppressed.")
     if p["scalp_ok"]:
         lines.append("scalping: allowed \u2705")
     else:

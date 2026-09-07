@@ -694,18 +694,19 @@ class Service:
             self._save()
 
     def universe_size(self, style):
-        """Pairs in the universe that may serve this style (3C: scalping is
-        limited to pairs on live real-time feeds -- crypto, and FX/metals
-        when the OANDA feed is configured; everything else scans the whole
-        universe)."""
+        """Pairs in the universe that may serve this style. Scalping is
+        limited to instruments with a liquidity window the bot can gate on
+        -- crypto around the clock, FX, metals, oil and the indices inside
+        their session; single stocks are excluded. Every other style scans
+        the whole universe."""
         return sum(1 for p in constants.ALL_UNIVERSE
                    if quality.style_allowed(p, style))
 
     def migrate_scalping_watches(self):
-        """3C startup pass: any scalping watch on a pair whose feed is only
-        delayed gets demoted to intraday, because the scheduler will refuse
-        to emit it anyway. Returns a list of (chat_id, pair) that changed so
-        main.py can DM each owner."""
+        """Startup pass: any scalping watch on an instrument that no longer
+        offers the style gets demoted to intraday, because the scheduler
+        will refuse to emit it anyway. Returns a list of (chat_id, pair)
+        that changed so main.py can DM each owner."""
         demoted = []
         with self._lock:
             for key, w in list(self.watches.items()):

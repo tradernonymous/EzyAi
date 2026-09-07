@@ -1,9 +1,12 @@
-"""Live-spread FX/metals scalping (Phases 1-3).
+"""Scalping on FX, metals, oil and the indices.
 
-Unit tests for the side-priced spec, the spread/ATR viability gate, the
-London/NY session gating, the per-class static spread fallbacks and the new
-user-facing gate copy. Candles are deterministic BAM fixtures stamped as an
-OANDA feed; nothing here touches the network.
+No feed the bot uses quotes bid/ask, so the spread is the static per-class
+estimate and these tests pin what that buys: the estimate widens the stop
+and trims the R:R, an absurd estimate makes a scalp unviable, the London/NY
+window still gates FX and metals, and the style itself is offered on the
+instruments that have a window and refused on single stocks. Candles are
+deterministic mid-only fixtures stamped as the Yahoo feed; nothing here
+touches the network.
 """
 import sys
 import time
@@ -32,11 +35,10 @@ T18 = datetime(2026, 9, 7, 18, 0, 0, tzinfo=timezone.utc).timestamp()  # Mon 18:
 TSAT = datetime(2026, 9, 5, 13, 0, 0, tzinfo=timezone.utc).timestamp()  # Sat
 
 
-def _bam_trend(n=150, step_ms=300000, drift=0.0008, spread=1e-4,
-               start=1.0800, now_ms=None):
-    """Deterministic rising OANDA BAM series. Monotonic up-drift -> EMA stack
-    bullish, so analyze() reliably picks a long side (and the mirrored
-    down-drift a short one)."""
+def _trend(n=150, step_ms=300000, drift=0.0008, start=1.0800, now_ms=None):
+    """Deterministic rising mid-only series, shaped like a Yahoo response.
+    Monotonic up-drift -> EMA stack bullish, so analyze() reliably picks a
+    long side (and the mirrored down-drift a short one)."""
     now_ms = now_ms or int(time.time() * 1000)
     now_ms = int(now_ms / step_ms) * step_ms
     candles = []
@@ -47,16 +49,9 @@ def _bam_trend(n=150, step_ms=300000, drift=0.0008, spread=1e-4,
         c = o * (1 + drift)
         hi = max(o, c) * (1 + 0.0004)
         lo = min(o, c) * (1 - 0.0004)
-        bid_c = c - spread / 2
-        ask_c = c + spread / 2
         candles.append({
             "ts": ts, "open": o, "high": hi, "low": lo, "close": c,
-            "volume": 100.0, "complete": True,
-            "mid": {"o": o, "h": hi, "l": lo, "c": c},
-            "bid": {"o": o - spread / 2, "h": hi - spread / 2,
-                    "l": lo - spread / 2, "c": bid_c},
-            "ask": {"o": o + spread / 2, "h": hi + spread / 2,
-                    "l": lo + spread / 2, "c": ask_c},
+            "volume": 100.0,
         })
         px = c
         ts += step_ms
@@ -64,9 +59,8 @@ def _bam_trend(n=150, step_ms=300000, drift=0.0008, spread=1e-4,
 
 
 class _StubHub:
-    """Non-DataHub stand-in whose series look exactly like an OANDA BAM
-    feed. Routes around DataHub bypass the freshness/session gates so the
-    spec and viability logic can be tested without a clock."""
+    """Non-DataHub stand-in. Routes around DataHub bypass the freshness and
+    session gates, so the spec logic can be tested without a clock."""
     _tfs = {"5m": "5m", "15m": "15m", "1h": "1h"}
 
     def __init__(self, candles_by_tf):
@@ -74,7 +68,7 @@ class _StubHub:
         self.mode = "live"
 
     def fetch_klines_ex(self, symbol, interval, limit=200):
-        return stamp_source(list(self._candles[interval]), "oanda"), "live"
+        return stamp_source(list(self._candles[interval]), "yahoo"), "live"
 
     def fetch_klines(self, symbol, interval, limit=200):
         return self.fetch_klines_ex(symbol, interval)[0]
@@ -84,14 +78,14 @@ class _StubHub:
         return "forex"
 
 
-def _hub(candles, spread=1e-4):
+def _hub(candles):
     return _StubHub({tf: candles for tf in _StubHub._tfs})
 
 
 def _as_datahub(candles):
     hub = DataHub()
     hub.fetch_klines_ex = lambda s, itv, limit=200: (
-        stamp_source(list(candles), "oanda"), "live")
+        stamp_source(list(candles), "yahoo"), "live")
     return hub
 
 
@@ -114,8 +108,22 @@ def test_scalp_class_mapping():
     assert constants.scalp_class("GBPUSD") == "fx_major"
     assert constants.scalp_class("EURJPY") == "fx_other"
     assert constants.scalp_class("XAUUSD") == "metals"
+    assert constants.scalp_class("WTI") == "metals"
+    assert constants.scalp_class("US30") == "index_us"
+    assert constants.scalp_class("NAS100") == "index_us"
     assert constants.scalp_class("BTCUSD") == "crypto"
     assert constants.scalp_class("AAPL") is None
+
+
+def test_scalping_is_offered_on_every_class_with_a_window():
+    # the gate quality.style_allowed reads is scalp_class, so the two must
+    # never drift apart
+    for pair in ("BTCUSD", "EURUSD", "EURJPY", "XAUUSD", "WTI", "US30"):
+        assert constants.scalp_class(pair) is not None
+        assert quality.style_allowed(pair, "scalping") is True
+    for pair in ("AAPL", "SPY", "NOTAPAIR"):
+        assert constants.scalp_class(pair) is None
+        assert quality.style_allowed(pair, "scalping") is False
 
 
 def test_spread_atr_max_style_defaults():
@@ -124,6 +132,15 @@ def test_spread_atr_max_style_defaults():
 
 
 # -- session windows ----------------------------------------------------------
+
+def test_us_index_window_follows_the_new_york_cash_session():
+    # 13:00 UTC is before the 13:30 open, 18:00 is inside it
+    t1300 = datetime(2026, 9, 7, 13, 0, tzinfo=timezone.utc).timestamp()
+    assert regime.scalp_session("US30", now=t1300)["in_window"] is False
+    assert regime.scalp_session("US30", now=T18)["in_window"] is True
+    # metals shut at 16:00, so the two classes genuinely differ
+    assert regime.scalp_session("XAUUSD", now=T18)["in_window"] is False
+
 
 def test_scalp_session_inside_and_outside():
     win = regime.scalp_session("EURUSD", now=T9)
@@ -156,36 +173,41 @@ def test_block_kind_classification():
 
 # -- side-priced spec ---------------------------------------------------------
 
-def test_spec_side_priced_long_enters_on_ask():
-    candles = _bam_trend()
+def test_spec_long_is_quoted_at_the_mid_with_a_spread_widened_stop():
+    candles = _trend()
     hub = _hub(candles)
     a = strat.analyze("EURUSD", "scalping", "normal", hub)
     assert a["side"] == "long"
     spec = a["spec"]
-    last = candles[-1]
-    assert spec["market"] == pytest.approx(last["ask"]["c"])
-    assert spec["sl"] < last["bid"]["c"]  # stop prints below the bid
+    last_close = candles[-1]["close"]
+    assert spec["market"] == pytest.approx(last_close)
     assert spec["tp1"] > spec["market"] and spec["tp2"] > spec["tp1"]
-    assert spec["spread_estimate"] == pytest.approx(
-        last["ask"]["c"] - last["bid"]["c"])
-    assert spec["spread_unit"] == "price"
-    # the quoted risk is the stop distance plus the live spread, exactly
-    assert spec["market"] - spec["sl"] > (last["ask"]["c"] - last["bid"]["c"])
-    assert spec["rr"] < _mode()["rr"]  # spread trimmed the R:R
+    assert spec["spread_estimate"] == constants.spread_bps("EURUSD")
+    assert spec["spread_unit"] == "bps"
+    # the quoted risk is the stop distance plus the assumed spread, so the
+    # R:R the user is shown is below the style target, not the raw number
+    widening = last_close * constants.spread_bps("EURUSD") / 10000.0
+    assert spec["market"] - spec["sl"] > widening
+    assert spec["rr"] < _mode()["rr"]
 
 
-def test_spec_side_priced_short_enters_on_bid():
-    candles = _bam_trend(drift=-0.0008)
+def test_spec_short_mirrors_the_long_side():
+    candles = _trend(drift=-0.0008)
     hub = _hub(candles)
     a = strat.analyze("EURUSD", "scalping", "normal", hub)
     assert a["side"] == "short"
     spec = a["spec"]
-    last = candles[-1]
-    assert spec["market"] == pytest.approx(last["bid"]["c"])
-    assert spec["sl"] > last["ask"]["c"]  # stop prints above the ask
+    assert spec["market"] == pytest.approx(candles[-1]["close"])
     assert spec["tp1"] < spec["market"] and spec["tp2"] < spec["tp1"]
-    assert spec["sl"] - spec["market"] > 0
+    assert spec["sl"] > spec["market"]
     assert spec["rr"] < _mode()["rr"]
+
+
+def test_spec_drops_a_setup_the_spread_makes_unprofitable():
+    # 900 bps on a 100.0 price is 9.0 of spread against a 2.0 ATR: whatever
+    # the structure says, there is no R:R left to trade
+    assert strat._spec("long", 100.0, 2.0, None, None, _mode(),
+                       spread_bps=900) is None
 
 
 def test_spec_static_path_still_bps():
@@ -193,19 +215,22 @@ def test_spec_static_path_still_bps():
     assert s["spread_estimate"] == 25 and s["spread_unit"] == "bps"
 
 
-def test_analysis_reports_spread_context():
-    candles = _bam_trend()
+def test_analysis_reports_spread_context_and_flags_it_as_an_estimate():
+    candles = _trend()
     a = strat.analyze("EURUSD", "scalping", "normal", _hub(candles))
     assert a["spread"]["median"] > 0
-    assert a["spread"]["atr_ratio"] is not None
+    assert a["spread"]["estimated"] is True
+    assert a["spread"]["latest"] == pytest.approx(
+        candles[-1]["close"] * constants.spread_bps("EURUSD") / 10000.0)
     assert 0 < a["spread"]["atr_ratio"] < 1
 
 
 # -- viability + session gates through a real DataHub -------------------------
 
 def test_viability_gate_rejects_wide_spread(monkeypatch):
-    wide = _bam_trend(spread=5e-3)  # ~5 pips: a huge slice of bar ATR
-    hub = _as_datahub(wide)
+    # 500 bps of assumed spread is a huge slice of the bar ATR
+    monkeypatch.setitem(constants.SPREAD_ESTIMATES, "EURUSD", 500)
+    hub = _as_datahub(_trend())
     # freeze the session window open so the viability gate is the active one
     monkeypatch.setattr(regime, "scalp_session",
                         lambda pair, now=None: {
@@ -216,7 +241,7 @@ def test_viability_gate_rejects_wide_spread(monkeypatch):
 
 
 def test_session_gate_rejects_outside_window(monkeypatch):
-    candles = _bam_trend()
+    candles = _trend()
     hub = _as_datahub(candles)
     monkeypatch.setattr(regime, "scalp_session",
                         lambda pair, now=None: {
@@ -226,9 +251,21 @@ def test_session_gate_rejects_outside_window(monkeypatch):
         strat.analyze("EURUSD", "scalping", "normal", hub)
 
 
+def test_viability_gate_leaves_crypto_alone(monkeypatch):
+    # crypto trades the exchange book: no spread is imposed on it, so the
+    # ATR-ratio gate must not fire however wide the table says
+    monkeypatch.setitem(constants.SPREAD_ESTIMATES, "BTCUSD", 500)
+    monkeypatch.setattr(regime, "scalp_session", lambda pair, now=None: None)
+    # no viability ValueError: the pair is analysed and simply finds no
+    # tradeable spec once the R:R rule has had its say
+    a = strat.analyze("BTCUSD", "scalping", "normal",
+                      _as_datahub(_trend(start=97000.0)))
+    assert a["pair"] == "BTCUSD"
+
+
 def test_session_gate_ignores_crypto(monkeypatch):
     # crypto is 24/7: scalp_session -> None must never gate it.
-    candles = _bam_trend(start=97000.0, spread=1.0)
+    candles = _trend(start=97000.0)
     hub = _as_datahub(candles)
     monkeypatch.setattr(regime, "scalp_session",
                         lambda pair, now=None: None)
@@ -267,40 +304,41 @@ def test_quality_gate_text_stale():
     assert "feed is quiet" in t
 
 
-def test_signal_message_oanda_provenance():
+def test_signal_message_names_the_delayed_feed_and_the_assumed_spread():
     sig = {
         "pair": "EURUSD", "side": "long", "style": "scalping",
         "mode": "normal", "tf": "5m", "entry_zone": (1.0850, 1.0852),
         "sl": 1.0840, "tp1": 1.0870, "tp2": 1.0875, "rr": 2.0,
         "risk_pct": 1.0, "confidence": 80, "support": [], "resistance": [],
-        "reasons": [], "data_source": "oanda", "data_mode": "live",
-        "spread_estimate": 0.00012, "component_scores": {"atr": 0.0008},
+        "reasons": [], "data_source": "yahoo", "data_mode": "live",
+        "spread_estimate": 2, "component_scores": {"atr": 0.0008},
     }
     t = msg.signal_message(sig)
-    assert "Feed: OANDA live" in t
-    assert "0.000120" in t and "0.15 ATR" in t
+    assert "Yahoo delayed" in t
+    assert "spread assumed 2 bps" in t
+    assert "verify with your broker" in t
 
 
 # -- 5A/5C provenance + engine passthrough -------------------------------------
 
-def test_engine_signal_carries_oanda_spread_unit_and_price():
+def test_engine_signal_carries_the_spread_estimate_in_bps():
     a, sig = signal_engine.quick_analyze(
-        "EURUSD", "scalping", "normal", _hub(_bam_trend()))
-    assert sig is not None and sig["spread_unit"] == "price"
-    assert sig["spread_estimate"] > 0
+        "EURUSD", "scalping", "normal", _hub(_trend()))
+    assert sig is not None and sig["spread_unit"] == "bps"
+    assert sig["spread_estimate"] == constants.spread_bps("EURUSD")
     assert a["spread"]["latest"] is not None
 
 
-def test_static_and_runtime_tier_agree(monkeypatch):
-    # 5C runtime gate re-checks what the static tier already promised.
-    monkeypatch.setenv("OANDA_API_KEY", "test-key")
-    assert quality.static_tier("EURUSD") is quality.Tier.REALTIME
-    ok, _ = quality.may_emit("EURUSD", "scalping", source="oanda")
+def test_delayed_feed_scalps_but_synthetic_never_does():
+    # FX is delayed and still scalps: the instrument decides, not the feed
+    assert quality.static_tier("EURUSD") is quality.Tier.DELAYED
+    ok, _ = quality.may_emit("EURUSD", "scalping", source="yahoo")
     assert ok is True
-    # a slip back to a delayed source is blocked on BOTH paths.
-    bad, reason = quality.may_emit("EURUSD", "scalping", source="yahoo")
-    assert bad is False and "delayed" in reason
-    assert quality.static_tier("EURUSD") is quality.Tier.REALTIME
+    # a slip to the demo generator is blocked whatever the pair
+    bad, reason = quality.may_emit("EURUSD", "scalping", source="synthetic")
+    assert bad is False and "synthetic" in reason
+    bad, reason = quality.may_emit("BTCUSD", "scalping", data_mode="demo")
+    assert bad is False and "synthetic" in reason
 
 
 # -- shadow capture + lifecycle gate (5B) --------------------------------------
@@ -311,8 +349,8 @@ def _sig(pair="EURUSD", side="long", style="scalping",
         "pair": pair, "side": side, "style": style, "mode": "normal",
         "tf": "5m", "entry": entry, "sl": entry - 0.005, "tp1": entry + 0.006,
         "tp2": entry + 0.010, "rr": 2.0, "confidence": 75, "reasons": ["x"],
-        "data_source": "oanda", "data_mode": "live", "ts": time.time(),
-        "spread_estimate": 0.0001, "spread_unit": "price",
+        "data_source": "yahoo", "data_mode": "live", "ts": time.time(),
+        "spread_estimate": 2, "spread_unit": "bps",
         "component_scores": {"atr": atr},
     }
 
@@ -361,7 +399,7 @@ def test_store_migrates_legacy_schema_to_spread_unit(tmp_path):
     assert "spread_unit" in cols
     store.record(7, _sig())  # and new rows still land, spread_unit included
     row = store.query("SELECT * FROM signals")[0]
-    assert row["spread_unit"] == "price"
+    assert row["spread_unit"] == "bps"
 
 
 def test_lifecycle_open_signal_blocks_until_resolved(tmp_path):
@@ -398,7 +436,7 @@ def test_lifecycle_no_store_never_blocks():
 
 
 def test_service_shadow_capture_swallows_scalping(monkeypatch, tmp_path):
-    svc = Service(_hub(_bam_trend()), tmp_path / "state.json")
+    svc = Service(_hub(_trend()), tmp_path / "state.json")
     monkeypatch.setattr(config, "scalp_shadow", lambda: True)
     sig = _sig("EURUSD", "long", "scalping")
     watch = {"chat_id": 7, "pair": "EURUSD", "style": "scalping",

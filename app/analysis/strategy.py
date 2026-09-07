@@ -8,7 +8,7 @@ from . import sentiment as sent
 from .. import constants
 from ..data import freshness as fr
 from ..data import quality
-from ..data.provider import DataHub, spread_context
+from ..data.provider import DataHub
 
 logger = logging.getLogger(__name__)
 
@@ -18,17 +18,14 @@ SENTIMENT_CUT = 0.15
 
 
 def _spec(side, price, atr_value, support_levels, resistance_levels,
-          mode_profile, spread_bps=0, live_spread=None, side_priced=False,
-          last_bid=None, last_ask=None):
+          mode_profile, spread_bps=0):
     # The stop is widened by the spread so what the bot quotes is what the
-    # broker can fill. For OANDA-priced FX/metals (Phase 1D/1E) the spread is
-    # the measured bid/ask width and the entry itself is executed on the ask
-    # (long) / bid (short): stop widening and quote slippage are the same,
-    # real number, not an estimate. Take-profit sizes are kept, so the R:R
-    # falls and setups that can no longer meet the style's target are dropped
-    # instead of emitted with a fictionally-wide R:R.
-    spread_used = (live_spread if live_spread is not None
-                   else price * spread_bps / 10000.0)
+    # broker can fill. No free feed quotes bid/ask, so the width is the
+    # static per-class estimate from constants.spread_bps(). Take-profit
+    # sizes are kept, so the R:R falls and setups that can no longer meet
+    # the style's target are dropped instead of emitted with a fictionally-
+    # wide R:R.
+    spread_used = price * spread_bps / 10000.0
     if side == "long":
         s_ref = support_levels[0] if support_levels else None
         floor = s_ref - atr_value * mode_profile["sl_atr_mult"] if s_ref else \
@@ -56,32 +53,20 @@ def _spec(side, price, atr_value, support_levels, resistance_levels,
     else:
         tp_delta = -sl_dist * rr
         tp2_delta = -sl_dist * rr * 2.0
-    if side_priced and last_bid is not None and last_ask is not None:
-        # Scaled on the side you actually trade: entry at ask (long) /
-        # bid (short), stop on the other side of a widened-by-spread level.
-        entry = last_ask if side == "long" else last_bid
-        stop_ref = last_bid if side == "long" else last_ask
-        sl = stop_ref - sl_dist if side == "long" else stop_ref + sl_dist
-        tp1 = entry + tp_delta
-        tp2 = entry + tp2_delta
-        zone = (min(entry_limit, entry), max(entry_limit, entry))
-        eff_risk = abs(entry - sl)  # sl_dist + the live spread, exactly
-    else:
-        entry = price
-        sl = price - sl_dist - spread_used if side == "long" \
-            else price + sl_dist + spread_used
-        tp1 = price + tp_delta
-        tp2 = price + tp2_delta
-        zone = (min(entry_limit, price), price) if side == "long" \
-            else (price, max(entry_limit, price))
-        eff_risk = sl_dist + spread_used
+    sl = price - sl_dist - spread_used if side == "long" \
+        else price + sl_dist + spread_used
+    tp1 = price + tp_delta
+    tp2 = price + tp2_delta
+    zone = (min(entry_limit, price), price) if side == "long" \
+        else (price, max(entry_limit, price))
+    eff_risk = sl_dist + spread_used
     if eff_risk <= 0:
         return None
     rr_eff = sl_dist * rr / eff_risk
     if rr_eff < rr * 0.8:
         return None  # spread ate too much of the target R:R: no setup
     return {
-        "market": entry,
+        "market": price,
         "limit": entry_limit,
         "zone_low": zone[0],
         "zone_high": zone[1],
@@ -90,9 +75,8 @@ def _spec(side, price, atr_value, support_levels, resistance_levels,
         "tp2": tp2,
         "rr": rr_eff,
         "risk_pct": mode_profile["risk_frac"] * 100.0,
-        "spread_estimate": (live_spread if live_spread is not None
-                            else spread_bps),
-        "spread_unit": "price" if live_spread is not None else "bps",
+        "spread_estimate": spread_bps,
+        "spread_unit": "bps",
     }
 
 
@@ -344,10 +328,10 @@ def analyze(pair, style, mode, hub, interval=None, sentiment=None):
                   else getattr(hub, "mode", None))
     if not candles or not dir_candles or not conf_candles:
         raise ValueError(f"no candles for {pair}")
-    # 1E: live spread measurement where the feed carries real bid/ask data
-    # (OANDA BAM). Everywhere else (Yahoo, Binance mid, synthetic) this is
-    # None and the static bps estimate stands in.
-    sc = spread_context(candles) if source == "oanda" else None
+    # No free feed quotes bid/ask, so the spread is the static per-class
+    # estimate in price units: it widens the stop in _spec(), feeds the
+    # viability gate below and is reported to the user as an estimate.
+    spread_abs = None
     # 3B: never analyse a stale/gapped/implausible series. On rejection the
     # scheduler counts this as a feed failure and backs off -- degraded data
     # is skipped, never silently consumed. The rejection is classified so the
@@ -416,27 +400,30 @@ def analyze(pair, style, mode, hub, interval=None, sentiment=None):
     confluence = {"pattern": 0, "sentiment": sentiment, "vol_ratio": None,
                   "session": "open"}
     if side != "neutral":
-        # 2C viability gate: a measured spread that is a material fraction of
-        # the bar's own ATR is untradeable whatever the R:R arithmetic says.
-        # The stop widening only spreads the pain; reject instead. Only the
-        # live OANDA basis can trip this (sc is None for every other feed).
-        if sc is not None and atr_v:
-            ratio = sc["latest"] / atr_v
+        # Viability gate: when the assumed spread is a material fraction of
+        # the bar's own range, the setup is untradeable whatever the R:R
+        # arithmetic says -- widening the stop only spreads the pain, so
+        # reject instead. Scoped to scalping on the pairs whose price is a
+        # mid we impose a spread on: crypto trades the exchange book with no
+        # assumed spread, and on intraday/swing horizons the estimate is
+        # small against the range by construction. There the R:R rejection
+        # in _spec() is the check that bites.
+        spread_abs = price * constants.spread_bps(pair) / 10000.0
+        gate_viability = (style == "scalping"
+                          and constants.scalp_class(pair) not in (None, "crypto"))
+        if atr_v and gate_viability:
+            ratio = spread_abs / atr_v
             if ratio > constants.SPREAD_ATR_MAX[style]:
                 logger.warning(
                     "viability reject %s %s/%s spread %.6g atr %.6g "
                     "ratio %.2f limit %.2f", pair, style, mode,
-                    sc["latest"], atr_v, ratio, constants.SPREAD_ATR_MAX[style])
+                    spread_abs, atr_v, ratio, constants.SPREAD_ATR_MAX[style])
                 raise ValueError(
                     f"quality gate: viability: {pair} {base_tf} spread "
-                    f"{sc['latest']:.4g} is {ratio:.2f}x its ATR "
+                    f"{spread_abs:.4g} is {ratio:.2f}x its ATR "
                     f"({constants.SPREAD_ATR_MAX[style]:.2f} limit)")
         spec = _spec(side, price, atr_v, sup_lv, res_lv, mode_profile,
-                     spread_bps=constants.spread_bps(pair),
-                     live_spread=sc["median"] if sc else None,
-                     side_priced=bool(style == "scalping" and sc is not None),
-                     last_bid=sc["last_bid"] if sc else None,
-                     last_ask=sc["last_ask"] if sc else None)
+                     spread_bps=constants.spread_bps(pair))
         gates = constants.SIGNAL_GATES[style]
         # Phase-3 confluence: factual notes always shown (zero signal
         # impact); confidence points only when CONFLUENCE_SCORING is on,
@@ -525,9 +512,10 @@ def analyze(pair, style, mode, hub, interval=None, sentiment=None):
         "data_source": source,
         "quality_note": _quality_note(pair, style, hub),
         "levels": {"support": sup_lv, "resistance": res_lv},
-        "spread": ({"median": sc["median"], "latest": sc["latest"],
-                    "atr_ratio": sc["latest"] / atr_v if atr_v else None}
-                   if sc is not None else None),
+        "spread": ({"median": spread_abs, "latest": spread_abs,
+                    "atr_ratio": spread_abs / atr_v if atr_v else None,
+                    "estimated": True}
+                   if spread_abs is not None else None),
         "side": side,
         "spec": spec,
         "confidence": float(round(confidence, 1)),

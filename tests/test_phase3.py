@@ -42,11 +42,17 @@ def test_runtime_tier():
     assert quality.runtime_tier("synthetic") is t.SYNTHETIC
 
 
-def test_may_emit_scalping_needs_realtime():
-    ok, why = quality.may_emit("EURUSD", "scalping", source="yahoo")
-    assert not ok and why
+def test_may_emit_scalping_follows_the_instrument_not_the_feed():
+    # a delayed feed is fine for a pair that has a liquidity window ...
+    ok, _ = quality.may_emit("EURUSD", "scalping", source="yahoo")
+    assert ok
+    ok, _ = quality.may_emit("XAUUSD", "scalping", source="yahoo")
+    assert ok
     ok, _ = quality.may_emit("BTCUSD", "scalping", source="binance")
     assert ok
+    # ... and a single stock is refused on any feed
+    ok, why = quality.may_emit("AAPL", "scalping", source="yahoo")
+    assert not ok and why
 
 
 def test_may_emit_permissive_styles_pass_on_delayed():
@@ -72,21 +78,28 @@ def test_may_emit_reads_stamp_from_candle_list():
 
 
 def test_style_allowed_only_scalping_restricted():
-    assert quality.style_allowed("EURUSD", "scalping") is False
-    assert quality.style_allowed("BTCUSD", "scalping") is True
-    assert quality.style_allowed("EURUSD", "intraday") is True
-    assert quality.style_allowed("BTCUSD", "intraday") is True
+    # crypto, FX, metals, oil and the indices scalp; single stocks do not
+    for pair in ("BTCUSD", "EURUSD", "XAUUSD", "WTI", "US30"):
+        assert quality.style_allowed(pair, "scalping") is True
+    assert quality.style_allowed("AAPL", "scalping") is False
+    assert quality.style_allowed("SPY", "scalping") is False
+    assert quality.style_allowed("WHATEVER", "scalping") is False
+    # every other style is unrestricted
+    for pair in ("EURUSD", "BTCUSD", "AAPL"):
+        assert quality.style_allowed(pair, "intraday") is True
 
 
-def test_allowed_styles_filters_scalping_for_delayed_pairs():
-    styles = quality.allowed_styles("EURUSD", ["scalping", "intraday", "swing"])
+def test_allowed_styles_filters_scalping_for_stocks_only():
+    styles = quality.allowed_styles("AAPL", ["scalping", "intraday", "swing"])
     assert styles == ["intraday", "swing"]
+    assert quality.allowed_styles("EURUSD", ["scalping", "swing"]) == \
+        ["scalping", "swing"]
     assert quality.allowed_styles("BTCUSD", ["scalping", "swing"]) == \
         ["scalping", "swing"]
 
 
 def test_rejection_and_warning_copy_exists():
-    assert "crypto" in quality.rejection_message("EURUSD", "scalping").lower()
+    assert "crypto" in quality.rejection_message("AAPL", "scalping").lower()
     assert quality.quality_warning("EURUSD", "intraday") is not None
     assert quality.quality_warning("BTCUSD", "scalping") is None
 
@@ -239,10 +252,10 @@ def test_demo_and_plan_condition_detected(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 3C - queue/migration: scalping watches on delayed pairs get demoted
+# queue/migration: scalping watches on instruments that never scalp get demoted
 # ---------------------------------------------------------------------------
 
-def test_migration_demotes_scalping_on_delayed_pairs(tmp_path):
+def test_migration_demotes_scalping_on_unscalpable_pairs(tmp_path):
     svc = Service(object(), tmp_path / "state.json")
     svc.watches = {
         "btc": {"key": "btc", "chat_id": 1, "pair": "BTCUSD",
@@ -250,16 +263,20 @@ def test_migration_demotes_scalping_on_delayed_pairs(tmp_path):
                 "last_signal_ts": 0.0},
         "eur": {"key": "eur", "chat_id": 2, "pair": "EURUSD",
                 "style": "scalping", "mode": "normal",
-                "last_signal_ts": 999.0},
-        "eur2": {"key": "eur2", "chat_id": 3, "pair": "EURUSD",
+                "last_signal_ts": 111.0},
+        "aapl": {"key": "aapl", "chat_id": 3, "pair": "AAPL",
+                 "style": "scalping", "mode": "normal",
+                 "last_signal_ts": 999.0},
+        "eur2": {"key": "eur2", "chat_id": 4, "pair": "EURUSD",
                  "style": "intraday", "mode": "normal"},
     }
     demoted = svc.migrate_scalping_watches()
-    assert [d[1] for d in demoted] == ["EURUSD"]
-    assert svc.watches["eur"]["style"] == "intraday"
-    assert svc.watches["btc"]["style"] == "scalping"  # crypto untouched
+    assert [d[1] for d in demoted] == ["AAPL"]
+    assert svc.watches["aapl"]["style"] == "intraday"
+    assert svc.watches["btc"]["style"] == "scalping"   # crypto untouched
+    assert svc.watches["eur"]["style"] == "scalping"   # FX now scalps too
     assert svc.watches["eur2"]["style"] == "intraday"
-    assert svc.watches["eur"]["last_signal_ts"] == 0.0
+    assert svc.watches["aapl"]["last_signal_ts"] == 0.0
 
 
 def test_universe_size_counts_only_allowed_pairs(tmp_path):
