@@ -381,19 +381,21 @@ class Bot:
                     or (update.message is not None and update.message.text))
         if billable and self._over_rate_limit(chat.id):
             q = self._buckets[chat.id]
-            # tell them once per burst, then stay silent
-            if len(q) == constants.RATE_LIMIT_PER_MINUTE:
-                q.append(time.time())
-                try:
-                    if update.callback_query is not None:
-                        await update.callback_query.answer(
-                            "Slow down a little \u2014 try again in a minute.",
-                            show_alert=True)
-                    else:
-                        await chat.send_message(
-                            "\u23f3 Slow down a little \u2014 try again in a minute.")
-                except Exception:
-                    pass
+            try:
+                if update.callback_query is not None:
+                    # a dropped tap must never look like a dead button: the
+                    # popup is per-tap and costs no chat message
+                    await update.callback_query.answer(
+                        "Slow down a little \u2014 try again in a minute.",
+                        show_alert=True)
+                elif len(q) == constants.RATE_LIMIT_PER_MINUTE:
+                    # typed commands: tell them once per burst, then stay
+                    # silent rather than answering spam with spam
+                    q.append(time.time())
+                    await chat.send_message(
+                        "\u23f3 Slow down a little \u2014 try again in a minute.")
+            except Exception:
+                pass
             raise ApplicationHandlerStop
 
     async def _redeem_site(self, update):
