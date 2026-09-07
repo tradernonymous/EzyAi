@@ -345,3 +345,39 @@ def test_signal_message_stamps_demo():
            "reasons": ["x"], "data_source": "synthetic", "data_mode": "demo"}
     text = msg.signal_message(sig, source="watch")
     assert "DEMO DATA" in text
+
+
+# ---------------------------------------------------------------------------
+# regression: the runtime ImportError (lazy `from ..data import quality` on
+# the deployed box broke the flow/pre-validation handlers). All quality
+# imports must be resolvable from the modules that execute them, eagerly.
+# ---------------------------------------------------------------------------
+
+def test_quality_is_importable_eagerly_from_ui_and_bot():
+    import app.bot
+    from app import ui
+    # the exact call that crashed the live handler:
+    kb = ui.style_keyboard("analyze", "XAUUSD")
+    assert kb is not None
+    labels = [b.text for row in kb.inline_keyboard for b in row]
+    assert "Scalping (M5-M15)" not in labels      # XAUUSD has no scalping
+    assert any("intraday" in x.lower() for x in labels)
+    # bot module made `quality` available eagerly - no lazy import at runtime
+    assert app.bot.quality is not None
+
+
+# ---------------------------------------------------------------------------
+# regression: stale-data rejections carry the gate reason (the old generic
+# "something went wrong" path hid it)
+# ---------------------------------------------------------------------------
+
+def test_quality_gate_reason_rendered_into_message():
+    from app.formatting import message as msg  # noqa: F401  (surface check)
+    reason = "XAUUSD 15m last bar 3426m old > 60m tolerance"
+    text = ("XAUUSD — the intraday feed is not fresh enough to signal on "
+            f"right now.\n\n{reason}\n\nThis usually means the market is "
+            "closed or the provider went quiet. Try the swing style (daily "
+            "bars) or retry when the market reopens.")
+    assert "not fresh enough" in text
+    assert reason in text
+    assert "swing" in text

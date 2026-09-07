@@ -26,6 +26,7 @@ from . import site_entitlements
 from . import constants
 from . import ui
 from .analysis import sentiment as _sent
+from .data import quality
 from .formatting import message as msg
 from .fundamentals import Fundamentals
 from .signals import engine as signal_engine
@@ -582,8 +583,21 @@ class Bot:
             target = query.message if query is not None else None
             logger.warning("analyze failed pair=%s: %s: %s", pair,
                            type(exc).__name__, exc)
-            text = (f"\U0001f9f9 Analysis hiccup for <b>{escape(pair)}</b> \u2014 "
-                    "the data feed stumbled. Tap retry in a few seconds.")
+            reason = str(exc)
+            if reason.startswith("quality gate:"):
+                # 3B rejection: the feed exists but is stale/gapped/implausible.
+                # Say why, so a quiet market reads as a data problem with an
+                # action, not as the bot being broken.
+                whats = reason.split("quality gate:", 1)[1].strip()
+                text = (f"\U0001f4c8 <b>{escape(pair)}</b> \u2014 the {style} "
+                        f"feed is not fresh enough to signal on right now."
+                        f"\n\n{escape(whats)}\n\nThis usually means the market "
+                        f"is closed or the provider went quiet. Try the "
+                        f"<b>swing</b> style (daily bars) or retry when the "
+                        f"market reopens.")
+            else:
+                text = (f"\U0001f9f9 Analysis hiccup for <b>{escape(pair)}</b> \u2014 "
+                        "the data feed stumbled. Tap retry in a few seconds.")
             kb = ui.retry_pair_keyboard("analyze")
             if target is not None:
                 await target.reply_text(text, parse_mode=ParseMode.HTML,
@@ -723,7 +737,6 @@ class Bot:
             return f"Unknown symbol <b>{escape(pair)}</b>."
         # 3C: a blocked pair/style combo never gets persisted, even when the
         # user typed the command directly and skipped the style buttons.
-        from ..data import quality
         if not quality.style_allowed(pair, style):
             return quality.rejection_message(pair, style)
         return None
@@ -1231,7 +1244,6 @@ class Bot:
                 await self._restart(update, ctx, flow_name, query)
                 return
             # 3C: never accept a blocked combination via a crafted callback
-            from ..data import quality
             if not quality.style_allowed(pair, style):
                 await self._reply(update, quality.rejection_message(pair, style),
                                   reply_markup=ui.retry_pair_keyboard(flow_name))

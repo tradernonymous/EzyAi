@@ -5,6 +5,7 @@ from . import regime as rg
 from . import sentiment as sent
 from .. import constants
 from ..data import freshness as fr
+from ..data import quality
 from ..data.provider import DataHub
 
 PATTERN_POINTS = 4.0
@@ -474,7 +475,6 @@ def _quality_note(pair, style, hub):
     and internal hubs so the message stays clean off production feeds."""
     if not isinstance(hub, DataHub):
         return None
-    from ..data import quality
     return quality.quality_warning(pair, style)
 
 

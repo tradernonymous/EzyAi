@@ -31,6 +31,7 @@ from html import escape
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from . import constants
+from .data import quality
 
 MENU_ANALYZE = "\U0001f4ca Analyze"
 MENU_WATCH = "\U0001f440 Watchlist"
@@ -223,7 +224,6 @@ def custom_pair_keyboard(flow):
 
 
 def style_keyboard(flow, pair=None):
-    from .data import quality
     styles = (quality.allowed_styles(pair, list(constants.STYLES))
               if pair else list(constants.STYLES))
     rows = [[InlineKeyboardButton(
