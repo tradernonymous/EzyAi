@@ -1296,11 +1296,13 @@ class Bot:
         if action == "style":
             flow_name, style = cb["flow"], cb["style"]
             pair = flow.get("pair")
-            if style not in constants.STYLES or not pair:
+            # the autopilot flow has no pair step: it scans the universe,
+            # and AutoPilot filters that universe per style itself
+            if style not in constants.STYLES or (not pair and flow_name != "auto"):
                 await self._restart(update, ctx, flow_name, query)
                 return
             # 3C: never accept a blocked combination via a crafted callback
-            if not quality.style_allowed(pair, style):
+            if pair and not quality.style_allowed(pair, style):
                 await self._reply(update, quality.rejection_message(pair, style),
                                   reply_markup=ui.retry_pair_keyboard(flow_name))
                 return
@@ -1359,6 +1361,13 @@ class Bot:
                 text, _ = ui.prompt_pair(flow_name)
                 await self._edit_or_send(
                     query, text, ui.pair_keyboard(flow_name, flow.get("page", 0)))
+            elif flow_name == "auto" and step == "style":
+                await self._auto_setup(update, ctx, query)
+            elif flow_name == "auto" and step == "mode" and flow.get("style"):
+                style = flow["style"]
+                text = (f"{ui.FLOW_TITLE['auto']} \u2014 step 2/2\n"
+                        f"{style}: pick risk mode:")
+                await self._edit_or_send(query, text, ui.mode_keyboard(flow_name))
             elif step == "style" and flow.get("pair"):
                 text, kb = ui.prompt_style(flow_name, flow["pair"])
                 await self._edit_or_send(query, text, kb)
