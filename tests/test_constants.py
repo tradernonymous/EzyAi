@@ -76,3 +76,25 @@ def test_crypto_usd_spelling_with_venue_mapping():
     assert constants.base_asset("BTCUSDT") == "BTC"
     assert constants.base_asset("EURUSD") == "EURUSD"
     assert constants.binance_symbol("BTCUSD") == "BTCUSDT"
+
+def test_pair_order_puts_metals_and_oil_first_and_stocks_last():
+    u = constants.ALL_UNIVERSE
+    # metals, then oil and gas, then the indices
+    assert u[:7] == ["XAUUSD", "XAGUSD", "COPPER", "WTI", "UKOIL", "NGAS",
+                     "US30"]
+    # then FX majors, then crypto, then stocks
+    assert u.index("US30") < u.index("EURUSD") < u.index("BTCUSD") < \
+        u.index("AAPL")
+    assert u[-len(constants.STOCK_UNIVERSE):] == constants.STOCK_UNIVERSE
+    # every pair appears exactly once
+    assert len(u) == len(set(u))
+    assert len(u) == (len(constants.CFD_UNIVERSE) + len(constants.FX_UNIVERSE)
+                      + len(constants.CRYPTO_UNIVERSE)
+                      + len(constants.STOCK_UNIVERSE))
+
+
+def test_every_scalpable_class_has_a_session_window():
+    classes = {constants.scalp_class(p) for p in constants.ALL_UNIVERSE}
+    classes.discard(None)
+    classes.discard("crypto")  # 24/7, deliberately unwindowed
+    assert classes and classes <= set(constants.SCALP_SESSIONS)

@@ -278,7 +278,8 @@ class Bot:
         await self._reply(update, msg.calibration_report(cal))
 
     async def cmd_verify_feed(self, update, ctx):
-        """Admin only: one-shot feed diagnostics (OANDA health, tier, latency)."""
+        """Admin only: one-shot feed diagnostics (provider, tier, freshness,
+        session window)."""
         if not self._is_admin(update):
             return
         pair = (ctx.args[0] if ctx.args else "EURUSD").upper()[:24]

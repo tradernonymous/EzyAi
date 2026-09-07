@@ -177,49 +177,47 @@ STOCK_UNIVERSE = [
     "SPY", "QQQ", "IWM", "VOO", "TQQQ", "ARKK",
 ]
 
+# Metals, energy and index CFDs, in the order the pair picker shows them:
+# metals first, then energy, then the indices. Yahoo tickers are the futures
+# / index symbols that back each display name.
 CFD_UNIVERSE = {
     "XAUUSD": "GC=F",
     "XAGUSD": "SI=F",
+    "COPPER": "HG=F",
     "WTI": "CL=F",
     "UKOIL": "BZ=F",
     "NGAS": "NG=F",
-    "COPPER": "HG=F",
     "US30": "^DJI",
     "NAS100": "^IXIC",
     "SPX500": "^GSPC",
     "GER40": "^GDAXI",
 }
 
+# Chart links only -- TradingView has no free data API and its feed may not
+# be redistributed, so these symbols are used to build a chart URL and
+# nothing else. Prices always come from the providers in app/data.
 CFD_TRADINGVIEW = {
-    "XAUUSD": "OANDA:XAUUSD",
-    "XAGUSD": "OANDA:XAGUSD",
+    "XAUUSD": "TVC:GOLD",
+    "XAGUSD": "TVC:SILVER",
+    "COPPER": "TVC:COPPER",
     "WTI": "TVC:USOIL",
     "UKOIL": "TVC:UKOIL",
     "NGAS": "TVC:NG",
-    "COPPER": "TVC:COPPER",
     "US30": "TVC:DJI",
     "NAS100": "TVC:NASDAQ",
     "SPX500": "TVC:SPX",
     "GER40": "TVC:DAX",
 }
 
-# Real-time FX & metals via the OANDA v3 API (brief 3C option 2: scalping on
-# FX and XAUUSD). A covered pair is tiered REALTIME while OANDA_API_KEY is
-# configured; everything else keeps the Yahoo delayed feed. Instrument names
-# are OANDA's PRIMARY form (EUR_USD, XAU_USD, ...).
-OANDA_INSTRUMENTS = {
-    "EURUSD": "EUR_USD", "GBPUSD": "GBP_USD", "USDJPY": "USD_JPY",
-    "AUDUSD": "AUD_USD", "USDCHF": "USD_CHF", "USDCAD": "USD_CAD",
-    "NZDUSD": "NZD_USD", "EURGBP": "EUR_GBP", "EURJPY": "EUR_JPY",
-    "GBPJPY": "GBP_JPY",
-    "XAUUSD": "XAU_USD", "XAGUSD": "XAG_USD",
-}
-
+# Display order for every pair picker, autopilot rotation and random pick:
+# metals, oil and the indices first, then the FX majors, then crypto, with
+# stocks last. ui.pair_keyboard() paginates this list directly, so this
+# tuple is the single place the ordering is decided.
 ALL_UNIVERSE = (
-    CRYPTO_UNIVERSE
+    list(CFD_UNIVERSE.keys())
     + list(FX_UNIVERSE.keys())
+    + CRYPTO_UNIVERSE
     + STOCK_UNIVERSE
-    + list(CFD_UNIVERSE.keys())
 )
 
 # Phase-2 ranked scanner: pairs analyzed per autopilot run, round-robined
@@ -245,10 +243,11 @@ SPREAD_ESTIMATES = {
     "ENAUSD": 10, "ONDOUSD": 10, "AAVEUSD": 8, "UNIUSD": 8,
     "XLMUSD": 6, "VETUSD": 10, "ICPUSD": 10, "HBARUSD": 8,
 }
-# Phase 2B: realistic static fallbacks per asset class, used ONLY when the
-# live OANDA spread is unavailable (Yahoo-served pairs). They replace the old
-# flat 25 bps that over-widened every FX/metals stop and hid the spread from
-# the R:R. Live-measured spreads supersede these entirely for OANDA pairs.
+# Realistic static spreads per asset class, in basis points. No free feed
+# quotes bid/ask, so every non-crypto pair is priced off these: the stop is
+# widened by the estimate and the setup is dropped when the widening eats
+# the style's R:R. They replace the old flat 25 bps that over-widened every
+# FX/metals stop and hid the spread from the R:R entirely.
 SPREAD_CLASS_FALLBACK_BPS = {
     "forex": 2, "cfd": 3, "stock": 8, "crypto": 10,
 }
@@ -308,7 +307,18 @@ SCALP_SESSIONS = {
         "preferred": ((12 * 60, 16 * 60),),
         "label": "the London window (07:00\u201316:00 UTC)",
     },
+    # US index CFDs are priced off the cash index, which only prints during
+    # the New York session -- scalping them at 08:00 UTC would analyse
+    # yesterday's close.
+    "index_us": {
+        "windows": ((13 * 60 + 30, 20 * 60),),
+        "preferred": ((13 * 60 + 30, 17 * 60),),
+        "label": "the New York cash session (13:30\u201320:00 UTC)",
+    },
 }
+
+# CFD symbols priced off a US cash index rather than a 24h futures book.
+INDEX_US = {"US30", "NAS100", "SPX500"}
 
 # Majors carry the deepest book; crosses/EMs trade thinner and stop earlier.
 SCALP_CLASS_MAJORS = {"EURUSD", "GBPUSD", "USDJPY", "USDCHF",
@@ -316,12 +326,19 @@ SCALP_CLASS_MAJORS = {"EURUSD", "GBPUSD", "USDJPY", "USDCHF",
 
 
 def scalp_class(pair):
-    """Session class for scalping-window gating: 'metals', 'fx_major',
-    'fx_other', 'crypto' or None (stocks/unknown never scalp)."""
+    """Session class for scalping-window gating: 'metals', 'index_us',
+    'fx_major', 'fx_other', 'crypto' or None.
+
+    None means the instrument is never scalped, whatever the feed says --
+    single stocks and unknown symbols. app/data/quality.py reads this as
+    the scalping gate, so adding a class here enables the style.
+    """
     s = pair.upper()
     if s in CRYPTO_UNIVERSE or s.endswith(("USDT", "USDC")):
         return "crypto"
-    if s in CFD_UNIVERSE:  # XAUUSD/XAGUSD
+    if s in INDEX_US:
+        return "index_us"
+    if s in CFD_UNIVERSE:  # metals, energy, GER40
         return "metals"
     if s in FX_UNIVERSE:
         return "fx_major" if s in SCALP_CLASS_MAJORS else "fx_other"

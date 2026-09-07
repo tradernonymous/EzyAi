@@ -124,20 +124,6 @@ def sentry_dsn():
     return env("SENTRY_DSN", "")
 
 
-def oanda_key():
-    """OANDA v3 personal access token. Empty = OANDA feed off."""
-    return env("OANDA_API_KEY", "")
-
-
-def oanda_environment():
-    """'practice' or 'live' — switches the v3 host."""
-    return env("OANDA_ENVIRONMENT", "live").strip().lower()
-
-
-def oanda_enabled():
-    return bool(oanda_key())
-
-
 def scalp_shadow():
     """Phase 6B: compute and persist scalping candidates but emit nothing.
     Used to collect a practice week of live spread / session data before

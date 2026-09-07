@@ -32,16 +32,6 @@ FETCH_LIMIT = 500
 MIN_INTERVAL = 60.0
 
 
-def _bam_sides(c):
-    """The side a traded quote actually prints on: longs fill on the bid,
-    shorts on the ask (Phase 1D). Returns the per-side dict when the candle
-    carries OANDA bid/ask data, else None (mid-only feeds unchanged)."""
-    bid, ask = c.get("bid"), c.get("ask")
-    if bid and ask and bid.get("h") is not None and ask.get("h") is not None:
-        return {"long": bid, "short": ask}
-    return None
-
-
 class Resolver:
     def __init__(self, store, hub):
         self.store = store
@@ -101,9 +91,7 @@ class Resolver:
                    - constants.INTERVALS[tf]) * 1000
         if last["ts"] < need_ms:
             return
-        sides = _bam_sides(last)
-        exit_price = (sides[side]["c"] if sides and sides[side]["c"] is not None
-                      else last["close"])
+        exit_price = last["close"]
         risk = abs(sig["entry"] - sig["stop_loss"])
         if risk <= 0:
             return
@@ -127,11 +115,7 @@ def _walk(sig, candles):
         return None
 
     def touched(c):
-        sides = _bam_sides(c)
-        if sides:
-            h, lo = sides[side]["h"], sides[side]["l"]
-        else:
-            h, lo = c["high"], c["low"]
+        h, lo = c["high"], c["low"]
         if side == "long":
             return lo <= sl, h >= tp1, h >= tp2
         return h >= sl, lo <= tp1, lo <= tp2

@@ -138,9 +138,9 @@ class AutoPilot:
                 continue
             self.recent.append(pair)
             self.recent = self.recent[-6:]
-            # 3C emission gate: scalping requires a real-time feed (crypto,
-            # or FX/metals on OANDA); a feed that fell through to synthetic
-            # data must never emit either. Only enforced on DataHub: other
+            # Emission gate: scalping is only offered on instruments with a
+            # liquidity window, and a feed that fell through to synthetic
+            # data must never emit at all. Only enforced on DataHub: other
             # hubs are test seams and signal logic must run against them
             # regardless of provenance.
             if isinstance(self.hub, DataHub):
