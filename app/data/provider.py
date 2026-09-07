@@ -434,7 +434,10 @@ class DataHub:
         if kind == constants.KIND_CRYPTO:
             return kind, constants.binance_symbol(symbol.upper())
         if kind == constants.KIND_CFD:
-            return kind, constants.CFD_UNIVERSE[symbol.upper()]
+            up = symbol.upper()
+            # metals resolve to spot; everything else to its futures/index
+            # ticker. fetch_* falls back to CFD_UNIVERSE if spot fails.
+            return kind, constants.CFD_SPOT.get(up, constants.CFD_UNIVERSE[up])
         if kind == constants.KIND_FOREX:
             return kind, symbol.upper()
         if kind == constants.KIND_STOCK:
@@ -491,6 +494,17 @@ class DataHub:
             self.mode = DEMO
             return self.demo
         raise ValueError(f"Unknown symbol: {symbol}")
+
+    @staticmethod
+    def _cfd_fallback(symbol, sym):
+        """The futures ticker to retry with when a spot metal fails, else
+        None. Returns None once `sym` already IS the futures ticker, so a
+        failure there is a real failure and not an endless retry."""
+        up = symbol.upper()
+        spot = constants.CFD_SPOT.get(up)
+        if spot is None or sym != spot:
+            return None
+        return constants.CFD_UNIVERSE.get(up)
 
     @staticmethod
     def _cache_ttl(interval):
@@ -551,6 +565,22 @@ class DataHub:
                 last_error = exc
                 logger.warning("klines %s %s via %s failed: %s: %s", sym, interval,
                                type(partner).__name__, type(exc).__name__, exc)
+        fb_sym = self._cfd_fallback(symbol, sym)
+        if fb_sym is not None:
+            # spot metal did not resolve: fall back to the futures ticker so
+            # the pair keeps working, priced off the basis rather than not
+            # at all. The provider stamp is unchanged; only the venue moves.
+            try:
+                candles = validate_candles(
+                    self.cfd.fetch_klines(fb_sym, interval, limit), fb_sym)
+                stamp_source(candles, "yahoo")
+                self.mode = LIVE
+                self._cache_put(key, (candles, LIVE))
+                return candles, LIVE
+            except Exception as exc:
+                last_error = last_error or exc
+                logger.warning("klines %s %s via futures fallback failed: %s: %s",
+                               fb_sym, interval, type(exc).__name__, exc)
         if kind == constants.KIND_CRYPTO:
             try:
                 candles = validate_candles(self.ccxt.fetch_klines(sym, interval, limit), sym)
@@ -592,6 +622,18 @@ class DataHub:
                 last_error = exc
                 logger.warning("ticker %s via %s failed: %s: %s", sym,
                                type(partner).__name__, type(exc).__name__, exc)
+        fb_sym = self._cfd_fallback(symbol, sym)
+        if fb_sym is not None:
+            try:
+                tick = self.cfd.fetch_ticker(fb_sym)
+                tick["mode"] = LIVE
+                self.mode = LIVE
+                tick["symbol"] = symbol.upper()
+                return tick
+            except Exception as exc:
+                last_error = last_error or exc
+                logger.warning("ticker %s via futures fallback failed: %s: %s",
+                               fb_sym, type(exc).__name__, exc)
         if kind == constants.KIND_CRYPTO:
             try:
                 tick = self.ccxt.fetch_ticker(sym)

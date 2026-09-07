@@ -57,7 +57,11 @@ def test_cfd_classified():
         assert hub.classify(tag) == constants.KIND_CFD
     kind, sym = hub.resolve("XAUUSD")
     assert kind == constants.KIND_CFD
-    assert sym == "GC=F"
+    assert sym == "XAUUSD=X"          # gold is quoted spot, not off GC=F
+    assert hub._cfd_fallback("XAUUSD", sym) == "GC=F"
+    # a pair with no spot ticker resolves straight to its futures/index one
+    assert hub.resolve("WTI")[1] == "CL=F"
+    assert hub._cfd_fallback("WTI", "CL=F") is None
 
 
 def test_crypto_usd_spelling_with_venue_mapping():

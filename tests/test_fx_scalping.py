@@ -447,3 +447,49 @@ def test_service_shadow_capture_swallows_scalping(monkeypatch, tmp_path):
     # non-scalping flow is untouched by the shadow week.
     sig2 = _sig("EURUSD", "long", "intraday")
     assert svc._shadow_capture(dict(watch, style="intraday"), sig2) is False
+
+# -- what a stale feed inside an open window is told ---------------------------
+
+def test_open_window_with_a_quiet_feed_is_not_reported_as_a_shut_market():
+    # Mon 15:25 UTC: gold's window (07:00-16:00) has 35 minutes left, so
+    # "no alerts until the venue reopens, next session Tuesday" would be a
+    # claim the bot never checked -- the feed is what stopped, not the market
+    t = datetime(2026, 9, 7, 15, 25, tzinfo=timezone.utc).timestamp()
+    t = msg.quality_gate_text(
+        "XAUUSD", "scalping",
+        "quality gate: closed: XAUUSD 5m last bar 34m old > 20m tolerance",
+        now=t)
+    assert "quotes have gone quiet" in t
+    assert "markets look closed" not in t
+    assert "Tuesday" not in t
+    assert "resume by themselves" in t
+
+
+def test_a_genuinely_shut_venue_still_names_the_next_session():
+    t = datetime(2026, 9, 8, 3, 0, tzinfo=timezone.utc).timestamp()  # 03:00
+    out = msg.quality_gate_text(
+        "XAUUSD", "scalping",
+        "quality gate: closed: XAUUSD 5m last bar 400m old > 20m tolerance",
+        now=t)
+    assert "markets look closed" in out
+    assert "Next session" in out
+
+
+def test_the_weekend_is_never_inside_a_window():
+    # 13:00 matches the London/NY clock, but Saturday is not a trading day
+    assert regime.scalp_session("EURUSD", now=TSAT)["in_window"] is False
+    assert regime.scalp_session("XAUUSD", now=TSAT)["preferred"] is False
+    assert regime.scalp_session("EURUSD", now=T9)["in_window"] is True
+
+
+# -- metals are priced spot, not off the futures basis -------------------------
+
+def test_metals_resolve_to_spot_with_a_futures_fallback():
+    from app.data.provider import DataHub
+    hub = DataHub()
+    assert hub.resolve("XAUUSD")[1] == "XAUUSD=X"
+    assert hub.resolve("XAGUSD")[1] == "XAGUSD=X"
+    assert hub._cfd_fallback("XAUUSD", "XAUUSD=X") == "GC=F"
+    # once the futures ticker is the one in hand, there is nothing left to
+    # fall back to and a failure must surface instead of looping
+    assert hub._cfd_fallback("XAUUSD", "GC=F") is None
