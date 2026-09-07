@@ -49,7 +49,7 @@ def test_callback_round_trips():
         ui.cb_ppage("fund", 3), ui.cb_pick("quote", "XAUUSD"),
         ui.cb_pick("analyze", "custom"), ui.cb_style("watch", "swing"),
         ui.cb_mode("auto", "aggressive"), ui.cb_back("analyze", "pair"),
-        ui.cb_unwatch("EURUSD"),
+        ui.cb_unwatch("EURUSD"), ui.cb_unwatch("EURUSD", "scalping"),
         "ezy:cancel", "ezy:watch_go", "ezy:auto_go",
         "ezy:auto_stop", "ezy:auto_stop_yes", "ezy:dash",
     ]
@@ -127,9 +127,13 @@ def test_watches_keyboard_per_row_buttons():
             {"pair": "XAUUSD", "style": "swing", "mode": "safe",
              "last_signal_ts": 0}]
     cbs = _callbacks(ui.watches_keyboard(rows))
-    assert "ezy:unwatch:BTCUSD" in cbs
-    assert "ezy:unwatch:XAUUSD" in cbs
+    assert "ezy:unwatch:BTCUSD:intraday" in cbs
+    assert "ezy:unwatch:XAUUSD:swing" in cbs
     assert "ezy:menu:watch" in cbs
+    assert ui.parse_callback("ezy:unwatch:XAUUSD:swing") == {
+        "a": "unwatch", "pair": "XAUUSD", "style": "swing"}
+    assert ui.parse_callback("ezy:unwatch:XAUUSD") == {
+        "a": "unwatch", "pair": "XAUUSD", "style": None}
 
 
 def test_dashboard_is_status_only_with_refresh():

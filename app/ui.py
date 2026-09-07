@@ -14,7 +14,7 @@ Callback scheme (all prefixed ``ezy:``, <=64 bytes):
   ezy:watch_go               confirm adding the watch in flow state
   ezy:auto_go                confirm starting autopilot in flow state
   ezy:auto_stop / ezy:auto_stop_yes
-  ezy:unwatch:<pair>         remove one watch
+  ezy:unwatch:<pair>[:<style>]  remove one watch (all styles without one)
   ezy:dash                   refresh dashboard
   ezy:cancel                 abort flow
   --- monetization ---
@@ -120,8 +120,8 @@ def cb_back(flow, step):
     return f"ezy:back:{flow}:{step}"
 
 
-def cb_unwatch(pair):
-    return f"ezy:unwatch:{pair}"
+def cb_unwatch(pair, style=None):
+    return f"ezy:unwatch:{pair}:{style}" if style else f"ezy:unwatch:{pair}"
 
 
 def cb_pay(tier, method):
@@ -166,8 +166,9 @@ def parse_callback(data):
         return {"a": "mode", "flow": parts[2], "mode": parts[3]}
     if kind == "back" and len(parts) == 4:
         return {"a": "back", "flow": parts[2], "step": parts[3]}
-    if kind == "unwatch" and len(parts) == 3:
-        return {"a": "unwatch", "pair": parts[2]}
+    if kind == "unwatch" and len(parts) in (3, 4):
+        return {"a": "unwatch", "pair": parts[2],
+                "style": parts[3] if len(parts) == 4 else None}
     if kind == "pay" and len(parts) == 4:
         return {"a": "pay", "tier": parts[2], "method": parts[3]}
     if kind == "tier" and len(parts) == 3:
@@ -267,7 +268,7 @@ def watches_keyboard(rows):
     kb = []
     for w in rows:
         kb.append([InlineKeyboardButton(f"\u274c {w['pair']} ({w['style']}/{w['mode']})",
-                                        callback_data=cb_unwatch(w["pair"]))])
+                                        callback_data=cb_unwatch(w["pair"], w["style"]))])
     kb.append([InlineKeyboardButton("\u2795 Add watch", callback_data=cb_menu("watch")),
                InlineKeyboardButton("\U0001f504 Refresh", callback_data="ezy:dash")])
     return InlineKeyboardMarkup(kb)

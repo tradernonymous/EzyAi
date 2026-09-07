@@ -281,11 +281,27 @@ def test_migration_demotes_scalping_on_unscalpable_pairs(tmp_path):
     }
     demoted = svc.migrate_scalping_watches()
     assert [d[1] for d in demoted] == ["AAPL"]
-    assert svc.watches["aapl"]["style"] == "intraday"
+    # the style is part of the key, so the demoted row moves to its new key
+    assert "aapl" not in svc.watches
+    moved = svc.watches["3:AAPL:intraday"]
+    assert moved["style"] == "intraday" and moved["key"] == "3:AAPL:intraday"
+    assert moved["last_signal_ts"] == 0.0
     assert svc.watches["btc"]["style"] == "scalping"   # crypto untouched
     assert svc.watches["eur"]["style"] == "scalping"   # FX now scalps too
     assert svc.watches["eur2"]["style"] == "intraday"
-    assert svc.watches["aapl"]["last_signal_ts"] == 0.0
+
+
+def test_demoted_scalp_never_clobbers_an_existing_intraday_watch(tmp_path):
+    svc = Service(object(), tmp_path / "state.json")
+    svc.add_watch(3, "AAPL", "intraday", "safe")
+    svc.watches["3:AAPL:intraday"]["last_signal_ts"] = 777.0
+    svc.watches["3:AAPL:scalping"] = {
+        "key": "3:AAPL:scalping", "chat_id": 3, "pair": "AAPL",
+        "style": "scalping", "mode": "normal", "last_signal_ts": 1.0}
+    assert svc.migrate_scalping_watches() == [(3, "AAPL")]
+    assert list(svc.watches) == ["3:AAPL:intraday"]
+    kept = svc.watches["3:AAPL:intraday"]
+    assert kept["mode"] == "safe" and kept["last_signal_ts"] == 777.0
 
 
 def test_universe_size_counts_only_allowed_pairs(tmp_path):

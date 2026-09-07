@@ -803,8 +803,11 @@ class Bot:
         if not ctx.args:
             await self.cmd_watches(update, ctx)
             return
-        ok = self.service.remove_watch(update.effective_chat.id, ctx.args[0].upper())
-        await self._reply(update, "Watch removed." if ok else "No such watch.")
+        style = ctx.args[1].lower() if len(ctx.args) > 1 else None
+        ok = self.service.remove_watch(update.effective_chat.id,
+                                       ctx.args[0].upper(), style)
+        done = "Watch removed." if style else "Watches removed."
+        await self._reply(update, done if ok else "No such watch.")
         if ok:
             await self.cmd_watches(update, ctx)
 
@@ -1402,7 +1405,7 @@ class Bot:
             return
 
         if action == "unwatch":
-            ok = self.service.remove_watch(chat_id, cb["pair"])
+            ok = self.service.remove_watch(chat_id, cb["pair"], cb.get("style"))
             await self._send_watches(query, chat_id)
             if not ok:
                 await query.message.reply_text("No such watch.")
