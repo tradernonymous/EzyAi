@@ -28,6 +28,7 @@ from . import ui
 from .analysis import sentiment as _sent
 from .data import quality
 from .formatting import message as msg
+from .outcomes.calibration import Calibration
 from .fundamentals import Fundamentals
 from .signals import engine as signal_engine
 from .signals.scheduler import StateError
@@ -98,6 +99,7 @@ class Bot:
         a.add_handler(CommandHandler("account", self.cmd_account))
         a.add_handler(CommandHandler("export", self.cmd_export))
         a.add_handler(CommandHandler("stats", self.cmd_stats))
+        a.add_handler(CommandHandler("calibration", self.cmd_calibration))
         a.add_handler(CommandHandler("redeem", self.cmd_redeem))
         a.add_handler(CommandHandler("mkcode", self.cmd_mkcode))
         a.add_handler(CommandHandler("codes", self.cmd_codes))
@@ -253,6 +255,25 @@ class Bot:
             await self._reply(update, "Could not read outcome stats right now.")
             return
         await self._reply(update, msg.stats_report(data))
+
+    async def cmd_calibration(self, update, ctx):
+        """Admin only: Phase-4 calibration curve (hit rate & R per bucket)."""
+        if not self._is_admin(update):
+            return
+        store = self.service.outcomes
+        if store is None:
+            await self._reply(update, "Outcome tracking is disabled on this "
+                                      "instance (see the logs).")
+            return
+        try:
+            cal = Calibration(store)
+            cal.curve()  # surface query errors before build the report
+        except Exception as exc:
+            logger.warning("calibration query failed: %s: %s",
+                           type(exc).__name__, exc)
+            await self._reply(update, "Could not read calibration data right now.")
+            return
+        await self._reply(update, msg.calibration_report(cal))
 
     async def _reply(self, update, text, **kw):
         if not text:

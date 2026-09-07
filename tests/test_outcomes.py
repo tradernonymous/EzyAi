@@ -21,14 +21,30 @@ TF_15M = 900
 
 def sig(pair="BTCUSD", side="long", style="intraday", mode="normal",
         entry=100.0, sl=90.0, tp1=120.0, tp2=140.0, rr=2.0, conf=70.0,
-        ts=None, data_mode="live"):
+        ts=None, data_mode="live", spread_estimate=None):
     return {
         "pair": pair, "side": side, "style": style, "mode": mode, "tf": "15m",
         "entry": entry, "sl": sl, "tp1": tp1, "tp2": tp2, "rr": rr,
         "confidence": conf, "reasons": ["EMA bull"], "data_mode": data_mode,
         "ts": ts if ts is not None else time.time(),
         "component_scores": {"rsi": 55.0, "ema21": 101.0, "none_key": None},
+        "spread_estimate": spread_estimate,
     }
+
+
+def test_record_persists_spread_estimate(tmp_path):
+    store = _store(tmp_path)
+    store.record(1, sig(spread_estimate=22), "watch")
+    rows = store.query("SELECT spread_estimate FROM signals")
+    assert rows[0]["spread_estimate"] == 22
+
+
+def test_query_returns_rows_and_binds_params(tmp_path):
+    store = _store(tmp_path)
+    store.record(1, sig(), "watch")
+    store.record(1, sig(pair="ETHUSD"), "watch")
+    rows = store.query("SELECT pair FROM signals WHERE pair=?", ("ETHUSD",))
+    assert [r["pair"] for r in rows] == ["ETHUSD"]
 
 
 def candles(ts_ms, n, step_s=TF_15M, base=100.0, span=2.0):

@@ -1,6 +1,7 @@
 from html import escape
 
 from .. import constants
+from ..outcomes import calibration as _calibration
 
 BADGE = {
     "long": "\U0001f7e2",
@@ -593,6 +594,65 @@ def stats_report(s):
     lines.append("")
     lines.append("\u2139 First-touch resolution: SL < TP1 < TP2 (same-bar "
                  "SL+TP counts as SL), no-touch expires by style window.")
+    return "\n".join(lines)
+
+
+def calibration_report(cal):
+    """Phase-4 /calibration: realised hit rate & expectancy per bucket."""
+    curve = cal.curve()
+    overall = cal.overall()
+    lines = ["\U0001f4c8 <b>CALIBRATION CURVE</b> "
+             "(live data, resolved signals)"]
+    if not overall["resolved"]:
+        lines.append("\nNo resolved live signals yet. Outcomes accumulate "
+                     "with each watch/autopilot alert \u2014 calibration "
+                     "kicks in once a confidence tier clears 30 resolutions.")
+        return "\n".join(lines)
+    lines.append(f"{overall['resolved']:,} resolved \u00b7 hit rate "
+                 f"<b>{overall['win_pct']:.1f}%</b> \u00b7 avg "
+                 f"<b>{overall['avg_r']:+.2f}R</b>")
+    groups = {}
+    for row in curve:
+        groups.setdefault((row["style"], row["mode"]), []).append(row)
+    for (style, mode), buckets in sorted(groups.items()):
+        lines.append("")
+        label_s = constants.STYLE_PROFILE[style]["label"]
+        label_m = constants.MODE_PROFILE[mode]["label"]
+        lines.append(f"<b>{label_s} \u00b7 {label_m}</b> (emit above "
+                     f"{constants.SIGNAL_THRESHOLDS[style][mode]:.0f})")
+        for b in buckets:
+            exp = f"{b['expectancy']:+.2f}R" if b["expectancy"] is not None else "-"
+            avg = f"{b['avg_r']:+.2f}R" if b["avg_r"] is not None else "-"
+            win = f"{b['win_pct']:.0f}%" if b["win_pct"] is not None else "-"
+            mark = "\u2713" if b["credible"] else "\u2026"
+            lines.append(f"\u2022 {b['lo']:3d}\u2013{b['lo'] + 9:3d} \u00b7 "
+                         f"n={b['resolved']} \u00b7 win {win} \u00b7 avg {avg} "
+                         f"\u00b7 exp {exp} {mark}")
+    recs = cal.recommend()
+    lines.append("")
+    if recs:
+        lines.append("<b>Suggested gate changes</b> (no auto-change \u2014 "
+                     "for review)")
+        for r in recs:
+            label_s = constants.STYLE_PROFILE[r["style"]]["label"]
+            label_m = constants.MODE_PROFILE[r["mode"]]["label"]
+            lines.append(f"\u2022 {label_s}/{label_m}: emit gate "
+                         f"{r['current_gate']:.0f} \u2192 "
+                         f"{r['proposed_gate']:.0f} \u00b7 a credible tier is "
+                         f"paying {r['expectancy']:+.2f}R avg "
+                         f"({r['n']} outcomes)")
+    else:
+        if all(b["credible"] for (_, bs) in groups.items() for b in bs):
+            lines.append("All emitted tiers are paying \u2265 "
+                         f"{_calibration.MIN_EXPECTANCY_R:.2f}R and every "
+                         "bucket is credible \u2014 no gate change suggested.")
+        else:
+            lines.append("No gate change yet: credible tiers need "
+                         f"\u2265 {_calibration.MIN_RESOLVED} resolutions "
+                         "each \u2014 credits above the emit line determine.")
+    lines.append("\n\u2139 Live signals only \u2014 demo/synthetic rows "
+                 "never tune thresholds. Re-run after each batch of "
+                 "resolutions.")
     return "\n".join(lines)
 
 

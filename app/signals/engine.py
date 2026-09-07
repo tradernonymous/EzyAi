@@ -61,6 +61,7 @@ def evaluate(analysis):
         "ts": time.time(),
         "data_mode": analysis["data_mode"],
         "data_source": analysis.get("data_source"),
+        "spread_estimate": spec.get("spread_estimate"),
         # Confidence inputs at emission time, stored verbatim for Phase-4
         # calibration (confidence = 12 base + 22 trend + 15 adx + 15 macd +
         # 15 rsi + 12 bb-mid + 9 stoch, times mode aggression).

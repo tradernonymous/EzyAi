@@ -78,8 +78,8 @@ class OutcomeStore:
             cur = db.execute(
                 "INSERT INTO signals (chat_id, source, created_at, pair, style, "
                 "mode, direction, entry, stop_loss, tp1, tp2, rr_target, "
-                "confidence, component_scores, data_source) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "confidence, component_scores, data_source, spread_estimate) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (int(chat_id), source, float(signal["ts"]),
                  str(signal["pair"]).upper(), signal["style"],
                  signal["mode"], signal["side"], float(signal["entry"]),
@@ -87,8 +87,14 @@ class OutcomeStore:
                  float(signal["rr"]), float(signal["confidence"]),
                  json.dumps({k: v for k, v in ind.items() if v is not None},
                             default=str),
-                 str(signal.get("data_mode", "live"))))
+                 str(signal.get("data_mode", "live")),
+                 signal.get("spread_estimate")))
             return cur.lastrowid
+
+    def query(self, sql, params=()):
+        """Public read helper returning rows as dicts (calibration/analytics)."""
+        with self._conn() as db:
+            return [dict(r) for r in db.execute(sql, params).fetchall()]
 
     def open_signals(self):
         with self._conn() as db:
