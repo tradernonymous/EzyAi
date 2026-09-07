@@ -30,6 +30,15 @@ def test_static_tier_routes_crypto_to_realtime():
 def test_static_tier_delays_everything_else():
     assert quality.static_tier("EURUSD") is quality.Tier.DELAYED
     assert quality.static_tier("AAPL") is quality.Tier.DELAYED
+    assert quality.static_tier("XAGUSD") is quality.Tier.DELAYED  # SI=F on Yahoo
+    assert quality.static_tier("WTI") is quality.Tier.DELAYED
+
+
+def test_static_tier_matches_the_venue_for_tokenized_gold():
+    # gold is served by Binance (PAXGUSDT), so the configured tier must
+    # agree with the runtime stamp instead of assuming every CFD is Yahoo
+    assert quality.static_tier("XAUUSD") is quality.Tier.REALTIME
+    assert quality.quality_warning("XAUUSD", "swing") is None
 
 
 def test_runtime_tier():
