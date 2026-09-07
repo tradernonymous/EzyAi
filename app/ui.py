@@ -13,7 +13,8 @@ Callback scheme (all prefixed ``ezy:``, <=64 bytes):
   ezy:back:<flow>:<step>     back to pair|style|mode step
   ezy:watch_go               confirm adding the watch in flow state
   ezy:auto_go                confirm starting autopilot in flow state
-  ezy:auto_stop / ezy:auto_stop_yes
+  ezy:auto_add               start the setup flow for another style
+  ezy:auto_stop[:<style>] / ezy:auto_stop_yes[:<style>]  (all styles without one)
   ezy:unwatch:<pair>[:<style>]  remove one watch (all styles without one)
   ezy:dash                   refresh dashboard
   ezy:cancel                 abort flow
@@ -120,6 +121,25 @@ def cb_back(flow, step):
     return f"ezy:back:{flow}:{step}"
 
 
+def cb_auto_stop(style=None, confirmed=False):
+    base = "ezy:auto_stop_yes" if confirmed else "ezy:auto_stop"
+    return f"{base}:{style}" if style else base
+
+
+def autopilot_status_keyboard(pilots):
+    """One stop button per running style, a stop-all when there are
+    several, plus adding another style and the menu."""
+    kb = [[InlineKeyboardButton(f"\u23f9 Stop {p.style}/{p.mode}",
+                                callback_data=cb_auto_stop(p.style))]
+          for p in pilots]
+    if len(pilots) > 1:
+        kb.append([InlineKeyboardButton("\u23f9 Stop all",
+                                        callback_data=cb_auto_stop())])
+    kb.append([InlineKeyboardButton("\u2795 Add style", callback_data="ezy:auto_add"),
+               InlineKeyboardButton("\U0001f3e0 Menu", callback_data=cb_menu("dash"))])
+    return InlineKeyboardMarkup(kb)
+
+
 def cb_unwatch(pair, style=None):
     return f"ezy:unwatch:{pair}:{style}" if style else f"ezy:unwatch:{pair}"
 
@@ -185,7 +205,9 @@ def parse_callback(data):
             return {"a": "admin_no", "chat": int(parts[2])}
         except ValueError:
             return {"a": "unknown"}
-    if data in ("ezy:cancel", "ezy:watch_go", "ezy:auto_go",
+    if kind in ("auto_stop", "auto_stop_yes") and len(parts) == 3:
+        return {"a": kind, "style": parts[2]}
+    if data in ("ezy:cancel", "ezy:watch_go", "ezy:auto_go", "ezy:auto_add",
                 "ezy:auto_stop", "ezy:auto_stop_yes", "ezy:dash",
                 "ezy:plans", "ezy:trial"):
         return {"a": parts[1]}

@@ -341,7 +341,7 @@ class Service:
         who haven't been nudged yet (covers expiry + legacy pre-PRO)."""
         with self._lock:
             chats = {w["chat_id"] for w in self.watches.values()}
-            chats.update(int(k) for k in self.autopilots)
+            chats.update(int(a.chat_id) for a in self.autopilots.values())
             out = []
             for chat_id in chats:
                 rec = self._plan_rec(chat_id)
@@ -361,8 +361,9 @@ class Service:
             for k in keys:
                 del self.watches[k]
             removed = bool(keys)
-            if str(chat_id) in self.autopilots:
-                del self.autopilots[str(chat_id)]
+            for k in [k for k, a in self.autopilots.items()
+                      if a.chat_id == chat_id]:
+                del self.autopilots[k]
                 removed = True
             if removed:
                 self._try_save()
@@ -538,7 +539,8 @@ class Service:
                 logger.warning("skipping malformed watch row %r: %s", w, exc)
         for a in data.get("autopilots") or []:
             try:
-                autopilots[str(a["chat_id"])] = AutoPilot(
+                key = self._autopilot_key(a["chat_id"], a["style"])
+                autopilots[key] = AutoPilot(
                     self.hub, a["chat_id"], a["style"], a["mode"])
             except (KeyError, TypeError) as exc:
                 logger.warning("skipping malformed autopilot row %r: %s", a, exc)
@@ -709,11 +711,32 @@ class Service:
         with self._lock:
             return [w for w in self.watches.values() if w["chat_id"] == chat_id]
 
+    @staticmethod
+    def _autopilot_key(chat_id, style):
+        # One autopilot per chat AND style, like watches: a scalping and a
+        # swing scanner can run side by side, each with its own cadence and
+        # its own daily quota (AutoPilot.run keys the quota on chat, style
+        # and mode). Keying on the chat alone made each start replace the
+        # scanner before it.
+        return f"{chat_id}:{style}"
+
     def start_autopilot(self, chat_id, style, mode):
-        key = str(chat_id)
+        """Start a scanner for this style, or change the mode of the one
+        already running (its scan cursor and recent list are kept)."""
+        key = self._autopilot_key(chat_id, style)
         with self._lock:
-            self.autopilots[key] = AutoPilot(self.hub, chat_id, style, mode)
+            pilot = self.autopilots.get(key)
+            if pilot is not None:
+                pilot.mode = mode
+            else:
+                pilot = self.autopilots[key] = AutoPilot(
+                    self.hub, chat_id, style, mode)
             self._save()
+            return pilot
+
+    def list_autopilots(self, chat_id):
+        with self._lock:
+            return [a for a in self.autopilots.values() if a.chat_id == chat_id]
 
     def universe_size(self, style):
         """Pairs in the universe that may serve this style. Scalping is
@@ -749,14 +772,23 @@ class Service:
                 self._save()
         return demoted
 
-    def stop_autopilot(self, chat_id):
-        key = str(chat_id)
+    def stop_autopilot(self, chat_id, style=None):
+        """Stop one style's scanner or, with no style, every scanner for
+        the chat. True when anything was stopped."""
         with self._lock:
-            if key in self.autopilots:
-                del self.autopilots[key]
+            if style is not None:
+                keys = [self._autopilot_key(chat_id, style)]
+            else:
+                keys = [k for k, a in self.autopilots.items()
+                        if a.chat_id == chat_id]
+            stopped = False
+            for key in keys:
+                if key in self.autopilots:
+                    del self.autopilots[key]
+                    stopped = True
+            if stopped:
                 self._save()
-                return True
-            return False
+            return stopped
 
     # -- background tick ----------------------------------------------------
     def _count_daily(self, key, limit):
