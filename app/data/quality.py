@@ -67,13 +67,16 @@ def static_tier(pair: str) -> Tier:
 
     Uses DataHub.classify() as the single pair->venue router, so this can
     never disagree with what the fetch path actually does: crypto resolves
-    to Binance/ccxt and is realtime; every other venue is served by Yahoo
-    and is delayed.
+    to Binance/ccxt and is realtime, and so does a CFD whose spot venue is
+    a Binance token (gold via PAXG, constants.CFD_SPOT); every other venue
+    is served by Yahoo and is delayed.
     """
     kind = _prov.DataHub.classify(pair)
     if kind is None:
         return Tier.DELAYED  # conservative: an unknown pair is not realtime
     if kind == constants.KIND_CRYPTO:
+        return Tier.REALTIME
+    if kind == constants.KIND_CFD and pair.upper() in constants.CFD_SPOT:
         return Tier.REALTIME
     return Tier.DELAYED
 
