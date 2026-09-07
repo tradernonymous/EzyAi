@@ -165,6 +165,35 @@ def test_dashboard_view_states():
     assert "BTCUSD" in on and "ON" in on and "live" in on
     off = msg.dashboard_view([], None, "live")
     assert "off" in off and "0" in off
+    assert "off" in msg.dashboard_view([], [], "live")
+
+    class _Swing:
+        style = "swing"
+        mode = "safe"
+    two = msg.dashboard_view([], [_Pilot(), _Swing()], "live")
+    assert "intraday/normal" in two and "swing/safe" in two
+
+
+def test_autopilot_status_lists_every_style_with_its_own_stop():
+    class _Swing:
+        style = "swing"
+        mode = "safe"
+    pilots = [_Pilot(), _Swing()]
+    text = msg.autopilot_status_text(pilots)
+    assert "intraday/normal" in text and "swing/safe" in text
+    cbs = _callbacks(ui.autopilot_status_keyboard(pilots))
+    assert "ezy:auto_stop:intraday" in cbs and "ezy:auto_stop:swing" in cbs
+    assert "ezy:auto_stop" in cbs and "ezy:auto_add" in cbs
+    assert ui.parse_callback("ezy:auto_stop:swing") == {"a": "auto_stop", "style": "swing"}
+    assert ui.parse_callback("ezy:auto_stop_yes:swing") == {
+        "a": "auto_stop_yes", "style": "swing"}
+    assert ui.parse_callback("ezy:auto_stop_yes") == {"a": "auto_stop_yes"}
+    one = _callbacks(ui.autopilot_status_keyboard([_Pilot()]))
+    assert "ezy:auto_stop" not in one  # no stop-all for a single scanner
+    assert "ezy:auto_stop:intraday" in one
+    acct = msg.account_text({"plan": "pro", "until": 4e9, "trial_used": True},
+                            1, pilots)
+    assert "on (intraday, swing)" in acct
 
 
 def test_dashboard_dots_reflect_alert_state():

@@ -960,8 +960,13 @@ def account_text(status, watches_n, autopilot_on, comped=False, trial_days=None)
                  f"{meter(left, days, width=3)}")
     else:
         state = "<b>Free</b> (Analyze only)"
+    if isinstance(autopilot_on, (list, tuple)):
+        auto = ("on (" + ", ".join(p.style for p in autopilot_on) + ")"
+                if autopilot_on else "off")
+    else:
+        auto = "on" if autopilot_on else "off"
     lines = ["\U0001f464 <b>Your account</b>", f"Plan: {state}",
-             f"Watching: {watches_n} pair(s) \u00b7 Autopilot: {'on' if autopilot_on else 'off'}"]
+             f"Watching: {watches_n} pair(s) \u00b7 Autopilot: {auto}"]
     if plan == "free" and not comped and not status.get("trial_used"):
         lines.append(f"\U0001f381 You still have your {days}-day free trial \u2014 see /plans.")
     return "\n".join(lines)
@@ -978,7 +983,13 @@ def expiry_nudge_text():
             "you upgrade. See /plans (3-day free trial included).")
 
 
-def dashboard_view(watches, pilot, data_mode):
+def dashboard_view(watches, pilots, data_mode):
+    """`pilots` is the chat's running autopilots (a list); a single pilot
+    or None is accepted for older callers."""
+    if pilots is None:
+        pilots = []
+    elif not isinstance(pilots, (list, tuple)):
+        pilots = [pilots]
     lines = ["\U0001f4cb <b>EzyAi dashboard</b>"]
     if watches:
         parts = []
@@ -989,8 +1000,9 @@ def dashboard_view(watches, pilot, data_mode):
         lines.append(f"\U0001f440 Watching ({len(watches)}): " + ", ".join(parts) + extra)
     else:
         lines.append("\U0001f440 Watching (0): tap Watchlist to add your first alert.")
-    if pilot is not None:
-        lines.append(f"\U0001f916 Autopilot: <b>ON</b> \u00b7 {pilot.style}/{pilot.mode}")
+    if pilots:
+        running = ", ".join(f"{p.style}/{p.mode}" for p in pilots)
+        lines.append(f"\U0001f916 Autopilot: <b>ON</b> \u00b7 {running}")
     else:
         lines.append("\U0001f916 Autopilot: off")
     lines.append(f"Feed: {data_mode}")
@@ -1029,6 +1041,15 @@ def auto_started_text(style, mode):
             "Scanning random pairs for you. Sit back.")
 
 
+def autopilot_status_text(pilots):
+    """Status card for the Autopilot button when scanners are running."""
+    lines = ["\U0001f916 Autopilot is <b>ON</b>"]
+    for p in pilots:
+        lines.append(f"\u2022 {p.style}/{p.mode}")
+    lines.append("Each style scans random pairs within its own daily limit.")
+    return "\n".join(lines)
+
+
 def auto_universe_note(style, universe_size):
     """Line appended to the autopilot start message when the style restricts
     the scanned universe (scalping = real-time feeds only)."""
@@ -1063,7 +1084,7 @@ def help_text():
         "/watches \u2014 list your active watches\n"
         "/unwatch PAIR [STYLE] \u2014 stop alerts for a pair (one style, or all)\n"
         "/autopilot STYLE MODE \u2014 random-pair auto signals\n"
-        "/stopautopilot \u2014 stop random signals\n\n"
+        "/stopautopilot [STYLE] \u2014 stop random signals (one style, or all)\n\n"
         "\U0001f464 <b>Account</b>\n"
         "/plans \u2014 trial and PRO plans\n"
         "/account \u2014 plan, watches and autopilot status\n"

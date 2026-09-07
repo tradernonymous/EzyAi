@@ -377,3 +377,40 @@ def test_trial_days_setting_persists_and_bounds(tmp_path):
     assert svc2.trial_days() == 5
     until = svc2.start_trial(51)
     assert abs(until - (time.time() + 5 * 86400)) < 5
+
+
+def test_one_autopilot_per_chat_and_style(tmp_path):
+    svc = _svc(tmp_path)
+    a = svc.start_autopilot(21, "scalping", "normal")
+    b = svc.start_autopilot(21, "swing", "safe")
+    assert a is not b
+    assert sorted(p.style for p in svc.list_autopilots(21)) == ["scalping", "swing"]
+    assert set(svc.autopilots) == {"21:scalping", "21:swing"}
+    # restarting a running style changes its mode and keeps the scanner
+    a.recent = ["BTCUSD"]
+    again = svc.start_autopilot(21, "scalping", "aggressive")
+    assert again is a and a.mode == "aggressive" and a.recent == ["BTCUSD"]
+    assert len(svc.list_autopilots(21)) == 2
+    # another chat is untouched by stops
+    svc.start_autopilot(22, "swing", "normal")
+    assert svc.stop_autopilot(21, "scalping") is True
+    assert [p.style for p in svc.list_autopilots(21)] == ["swing"]
+    assert svc.stop_autopilot(21, "scalping") is False
+    assert svc.stop_autopilot(21) is True
+    assert svc.list_autopilots(21) == []
+    assert svc.stop_autopilot(21) is False
+    assert [p.style for p in svc.list_autopilots(22)] == ["swing"]
+
+
+def test_autopilots_survive_a_restart_and_old_rows_load(tmp_path):
+    svc = _svc(tmp_path)
+    svc.start_autopilot(23, "intraday", "normal")
+    svc.start_autopilot(23, "swing", "safe")
+    again = _svc(tmp_path)
+    assert sorted((p.style, p.mode) for p in again.list_autopilots(23)) == [
+        ("intraday", "normal"), ("swing", "safe")]
+    # rows saved before styles were keyed carry no key at all; they still load
+    again._apply({"autopilots": [
+        {"chat_id": 24, "style": "swing", "mode": "normal"}]})
+    assert list(again.autopilots) == ["24:swing"]
+    assert again.forget_chat(24) is True and again.autopilots == {}
