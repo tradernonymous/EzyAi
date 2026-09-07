@@ -136,3 +136,10 @@ def oanda_environment():
 
 def oanda_enabled():
     return bool(oanda_key())
+
+
+def scalp_shadow():
+    """Phase 6B: compute and persist scalping candidates but emit nothing.
+    Used to collect a practice week of live spread / session data before
+    live FX/metal scalping is switched on for subscribers."""
+    return env("EZYAI_SCALP_SHADOW", "false").lower() in ("1", "true", "yes", "on")

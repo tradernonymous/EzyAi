@@ -18,6 +18,38 @@ def make_candle(ts, o, h, l, c, v):
             "close": float(c), "volume": float(v)}
 
 
+def _median(vals):
+    """Robust median of a numeric list (even length averages the two middles)."""
+    if not vals:
+        return None
+    s = sorted(vals)
+    n = len(s)
+    mid = n // 2
+    return s[mid] if n % 2 else (s[mid - 1] + s[mid]) / 2.0
+
+
+def spread_context(candles, window=12):
+    """Live bid/ask spread from an OANDA BAM candle series (Phase 1E).
+
+    Every bar carries `bid`/`ask` close prices. Returns the median rolling
+    spread (stop widening), the latest bar's spread (viability gate) and the
+    last bid/ask closes (side-priced entry), or None when the series has no
+    bid/ask data (every non-OANDA provider)."""
+    spreads = []
+    last_bid = last_ask = None
+    for c in candles:
+        ask = c.get("ask")
+        bid = c.get("bid")
+        if ask and bid and ask.get("c") is not None and \
+                bid.get("c") is not None:
+            spreads.append(float(ask["c"]) - float(bid["c"]))
+            last_bid, last_ask = float(bid["c"]), float(ask["c"])
+    if not spreads:
+        return None
+    return {"median": _median(spreads[-window:]), "latest": spreads[-1],
+            "last_bid": last_bid, "last_ask": last_ask, "series": spreads}
+
+
 def _retry_after(exc):
     """Seconds an HTTP 429/5xx asks us to wait, or None for other errors."""
     resp = getattr(exc, "response", None)
@@ -370,7 +402,22 @@ class OandaProvider:
         return int(dt.timestamp() * 1000) + int((frac.rstrip("Z")[:3] or "0"))
 
     @staticmethod
-    def parse_candles(payload):
+    def parse_candles(payload, include_incomplete=False, require_bam=False):
+        """Parse an OANDA /candles payload (price=BAM).
+
+        Every returned bar carries, in addition to the mid o/h/l/c/volume
+        that downstream indicators read:
+            mid/bid/ask  -> dicts of {o, h, l, c} (bid/ask None when the bar
+                            or request had none)
+            complete     -> bool  (1B: in-progress bars are DROPPED unless
+                            the caller asks to keep them; a half-formed ATR
+                            and a moving entry level are not tradeable input)
+
+        With require_bam=True (the fetch path, which always requests BAM) a
+        bar that has mid but no bid/ask raises instead of silently degrading
+        to a mid-only scalp -- the whole reason to shift FX/metals to OANDA
+        is that the live spread exists.
+        """
         out = []
         for c in payload.get("candles") or []:
             mid = c.get("mid") or {}
@@ -378,10 +425,36 @@ class OandaProvider:
                                 mid.get("l"), mid.get("c"))
             if None in (o, h, low, close):
                 continue
-            out.append(make_candle(
-                OandaProvider._ts(c["time"]),
-                float(o), float(h), float(low), float(close),
-                float(c.get("volume") or 0.0)))
+            complete = bool(c.get("complete"))
+            if not complete and not include_incomplete:
+                continue
+            bid = c.get("bid") or {}
+            ask = c.get("ask") or {}
+            if require_bam and (None in (bid.get("o"), bid.get("h"),
+                                         bid.get("l"), bid.get("c"))
+                                or None in (ask.get("o"), ask.get("h"),
+                                            ask.get("l"), ask.get("c"))):
+                raise ValueError(
+                    f"OANDA BAM response missing bid/ask at {c.get('time')}")
+            if bid.get("c") is None:
+                bid = None
+            if ask.get("c") is None:
+                ask = None
+            out.append({
+                "ts": OandaProvider._ts(c["time"]),
+                "open": float(o), "high": float(h), "low": float(low),
+                "close": float(close),
+                "volume": float(c.get("volume") or 0.0),
+                "complete": complete,
+                "mid": {"o": float(o), "h": float(h), "l": float(low),
+                        "c": float(close)},
+                "bid": ({"o": float(bid["o"]), "h": float(bid["h"]),
+                         "l": float(bid["l"]), "c": float(bid["c"])}
+                        if bid is not None else None),
+                "ask": ({"o": float(ask["o"]), "h": float(ask["h"]),
+                         "l": float(ask["l"]), "c": float(ask["c"])}
+                        if ask is not None else None),
+            })
         return out
 
     def __init__(self, timeout=10):
@@ -409,16 +482,20 @@ class OandaProvider:
     def validate(self, symbol):
         return self.instrument(symbol) is not None
 
-    def fetch_klines(self, symbol, interval, limit=200):
+    def fetch_klines(self, symbol, interval, limit=200, require_bam=True):
         inst = self.instrument(symbol)
         if inst is None:
             raise ValueError(f"No OANDA instrument: {symbol}")
+        # price=BAM returns bid + ask + mid in one request: the live spread
+        # costs nothing extra. parse_candles drops in-progress bars and raises
+        # when mid comes back without bid/ask (a silent degrade would fake the
+        # whole basis for scalping FX/metals on OANDA).
         payload = self._get(f"/instruments/{inst}/candles", {
-            "price": "M",
+            "price": "BAM",
             "granularity": self.granularity(interval),
             "count": int(limit),
         })
-        return self.parse_candles(payload)
+        return self.parse_candles(payload, require_bam=require_bam)
 
     def fetch_ticker(self, symbol, candles=None):
         candles = candles or self.fetch_klines(symbol, "1m", limit=5)
@@ -659,7 +736,15 @@ class DataHub:
         last_error = None
         if partner is not None:
             try:
-                candles = validate_candles(partner.fetch_klines(sym, interval, limit), sym)
+                # OANDA maps instruments from the display symbol (EURUSD,
+                # XAUUSD); the resolved `sym` for CFDs is the Yahoo ticker
+                # (GC=F) which OANDA does not know -- pass the display name.
+                if isinstance(partner, OandaProvider):
+                    candles = validate_candles(
+                        partner.fetch_klines(symbol, interval, limit), symbol)
+                else:
+                    candles = validate_candles(
+                        partner.fetch_klines(sym, interval, limit), sym)
                 if partner is self.demo:
                     stamp_source(candles, "synthetic")
                 elif isinstance(partner, CcxtProvider):
@@ -725,7 +810,10 @@ class DataHub:
         last_error = None
         if partner is not None:
             try:
-                tick = partner.fetch_ticker(sym)
+                if isinstance(partner, OandaProvider):
+                    tick = partner.fetch_ticker(symbol)
+                else:
+                    tick = partner.fetch_ticker(sym)
                 tick["mode"] = DEMO if partner is self.demo else LIVE
                 self.mode = tick["mode"]
                 tick["symbol"] = symbol.upper()

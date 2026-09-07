@@ -1,6 +1,7 @@
 from html import escape
 
 from .. import constants
+from ..analysis import regime as _regime
 from ..outcomes import calibration as _calibration
 
 BADGE = {
@@ -61,6 +62,9 @@ def analysis_report(a):
         sup = " / ".join(price(s) for s in a["levels"]["support"]) or "-"
         res = " / ".join(price(r) for r in a["levels"]["resistance"]) or "-"
         lines.append(f"Support: {sup}  \u00b7  Resistance: {res}")
+    sp = a.get("spread")
+    if sp and sp.get("atr_ratio") is not None:
+        lines.append(f"Spread: {price(sp['latest'])} ({sp['atr_ratio']:.2f} ATR)")
     lines.append("")
 
     if spec:
@@ -113,6 +117,20 @@ def signal_message(sig, source="watch"):
     if sig.get("data_source") == "synthetic" or sig.get("data_mode") == "demo":
         lines.append("\U0001f6a8 <b>DEMO DATA</b> \u2014 prices may be simulated. "
                      "Verify before acting.")
+    elif sig.get("data_source") == "oanda":
+        # 5B live BAM provenance: the real spread used to widen the stop,
+        # shown in price and as a fraction of the bar ATR so the reader can
+        # judge how expensive the entry is.
+        comp = sig.get("component_scores") or {}
+        atr = comp.get("atr")
+        sp = sig.get("spread_estimate")
+        if sp and atr:
+            lines.append(f"Feed: OANDA live \u00b7 spread {price(sp)} "
+                         f"({sp / atr:.2f} ATR)")
+        elif sp:
+            lines.append(f"Feed: OANDA live \u00b7 spread {price(sp)}")
+        else:
+            lines.append("Feed: OANDA live")
     elif sig.get("data_source") not in (None, "binance", "ccxt"):
         lines.append(f"Data feed: {sig['data_source']}")
     lines.append(f"Entry zone: <b>{price(sig['entry_zone'][0])}</b> \u2013 <b>{price(sig['entry_zone'][1])}</b>")
@@ -126,6 +144,69 @@ def signal_message(sig, source="watch"):
         lines.append("Why: " + "; ".join(e(r) for r in sig["reasons"][:3]))
     lines.append("\U000026a0\ufe0f Not financial advice.")
     return "\n".join(lines)
+
+
+def quality_gate_text(pair, style, reason, now=None):
+    """Human copy for a quality-gate rejection. `reason` is the raw exception
+    string from strategy.analyze(); `now` is epoch seconds (default wall
+    clock) so tests are deterministic."""
+    e = escape
+    head = f"{style} signal for <b>{e(pair)}</b>"
+    if reason.startswith("quality gate: session:"):
+        return (
+            f"\U0001f4c8 {head} \u2014 not the right time.\n\n"
+            f"Scalping {e(pair)} only runs during "
+            f"{_scalp_label(pair)}. Outside that window the spread is too "
+            f"wide to scalp profitably, so no alert is emitted.\n"
+            f"\U0001f513 Next window opens {_next_open_text(pair, now)}.")
+    if reason.startswith("quality gate: closed:"):
+        reopen = _regime.next_session_open(pair, now=now)
+        when = _regime.fmt_next_open(reopen) if reopen else "at the start "
+        return (
+            f"\U0001f4c8 {head} \u2014 markets look closed.\n\n"
+            f"{e(pair)} quotes have stopped updating (weekend, holiday or a "
+            f"halt). No alerts until the venue reopens.\n"
+            f"\U0001f4c5 Next session {when or 'later this week'}.")
+    if reason.startswith("quality gate: viability:"):
+        return (
+            f"\U0001f4c8 {head} \u2014 the live spread is too wide.\n\n"
+            f"{e(_strip_prefix(reason))} The stop widening already leaves "
+            f"no room, so this setup is dropped.\n"
+            f"\U0001f6aa No alert until the spread/ATR ratio recovers.")
+    detail = _strip_prefix(reason)
+    return (
+        f"\U0001f4c8 {head} \u2014 {e(style)} feed is quiet.\n\n"
+        f"{e(detail)} Alerts resume automatically when the feed catches up.")
+
+
+def _strip_prefix(reason):
+    b = reason.split("quality gate:", 1)
+    return b[1].strip() if len(b) == 2 else reason
+
+
+def _scalp_label(pair):
+    win = _regime.scalp_session(pair)
+    return win["label"] if win else "trading hours"
+
+
+def _next_open_text(pair, now):
+    nxt = _regime.next_session_open(pair, now=now)
+    if not nxt:
+        return "later this week"
+    import time as _t
+    secs = int(nxt - (now or _t.time()))
+    return f"in {_countdown(secs)} ({_regime.fmt_next_open(nxt)})"
+
+
+def _countdown(secs):
+    secs = max(0, secs)
+    h, rem = divmod(secs, 3600)
+    m = rem // 60
+    if h and m:
+        return f"{h}h {m}m"
+    if h:
+        return f"{h}h"
+    return f"{max(1, m)}m"
 
 
 def quote_report(pair, tick):
@@ -693,6 +774,14 @@ def verify_feed_report(p):
         if p["oanda_ok"]:
             lines.append(f"direct probe \u2705 \u00b7 latest bar "
                          f"{_age(p['oanda_age_s'])} old")
+            if p.get("oanda_bam_ok"):
+                sp = p.get("oanda_spread")
+                spread_txt = price(sp) if sp is not None else "-"
+                lines.append(f"BAM bid/ask feed \u2705 \u00b7 live spread "
+                             f"{spread_txt}")
+            else:
+                lines.append("\u26a0\ufe0f BAM bid/ask data missing \u2014 "
+                             "scalping stays blocked on live FX/metals")
         elif p.get("oanda_error"):
             lines.append(f"direct probe \u274c \u00b7 {e(p['oanda_error'])}")
     else:

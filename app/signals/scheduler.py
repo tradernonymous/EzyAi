@@ -10,11 +10,12 @@ import threading
 import time
 from datetime import datetime, timezone
 
+from .. import config
 from .. import constants
 from ..data import quality
 from ..data.provider import DataHub
 from . import engine as signal_engine
-from .autopilot import AutoPilot
+from .autopilot import AutoPilot, lifecycle_block
 
 logger = logging.getLogger(__name__)
 
@@ -771,6 +772,35 @@ class Service:
             return True
         return now - self.last_check.get(key, 0) >= interval * min(2 ** n, 16)
 
+    def _shadow_capture(self, watch, signal):
+        """Phase 6B: a scalping candidate in shadow mode is computed, stored
+        as a shadow row (invisible to the resolver/calibration) and logged --
+        but never sent to the user. Cooldown still applies so the shadow
+        week measures what would REALLY have been emitted. Returns True when
+        the emission was consumed (shadow mode or life-gated)."""
+        if signal.get("style") != "scalping" or not config.scalp_shadow():
+            return False
+        blocked, why = lifecycle_block(
+            self.outcomes, watch["chat_id"], watch["pair"],
+            watch["style"], signal)
+        if blocked:
+            logger.info("shadow %s %s suppressed: %s", watch["pair"],
+                        watch["style"], why)
+            return True
+        if self.outcomes is not None:
+            try:
+                self.outcomes.record_shadow(watch["chat_id"], signal, "watch")
+            except Exception as exc:
+                logger.warning("shadow record failed: %s: %s",
+                               type(exc).__name__, exc)
+        comp = signal.get("component_scores") or {}
+        logger.info(
+            "SHADOW %s %s/%s side=%s conf=%.1f spread=%s atr=%s",
+            signal["pair"], signal["style"], signal["mode"],
+            signal["side"], signal["confidence"],
+            signal.get("spread_estimate"), comp.get("atr"))
+        return True
+
     async def tick(self, send):
         now = time.time()
         self._prune_counters()
@@ -834,10 +864,24 @@ class Service:
         for watch, signal in zip(due, results):
             if not signal:
                 continue
+            # 6B shadow mode: scalping candidates are computed, stored and
+            # logged but never emitted (practice week before live FX/metals).
+            if self._shadow_capture(watch, signal):
+                continue
             min_gap = constants.STYLE_PROFILE[watch["style"]]["min_gap_s"]
             # One alert per pair per gap, whichever side: a symbol hovering
             # at a crossover must not fire long/short/long every tick.
             if now - watch.get("last_signal_ts", 0.0) < min_gap:
+                continue
+            # 4C cooldown: an open signal for (chat, pair, style) suppresses
+            # new ones, and a resolved one needs the zone re-arm first. Runs
+            # before the daily cap so a blocked signal spends no allowance.
+            blocked, why = lifecycle_block(
+                self.outcomes, watch["chat_id"], watch["pair"],
+                watch["style"], signal)
+            if blocked:
+                logger.info("suppressed %s %s: %s", watch["pair"],
+                            watch["style"], why)
                 continue
             if not self._count_daily(f"{watch['chat_id']}:watch",
                                      constants.WATCH_DAILY_LIMIT):
@@ -865,7 +909,8 @@ class Service:
             try:
                 async with sem:
                     signal, info = await asyncio.to_thread(
-                        pilot.run, self.daily_counters, self._lock)
+                        pilot.run, self.daily_counters, self._lock,
+                        store=self.outcomes)
             except Exception as exc:
                 logger.warning("autopilot chat=%s failed: %s: %s",
                                pilot.chat_id, type(exc).__name__, exc)
@@ -873,6 +918,12 @@ class Service:
             if signal is not None:
                 self._try_save()
                 if info is None:
+                    # 6B shadow mode swallows autopilot scalping the same
+                    # way as watch ticks.
+                    if self._shadow_capture(
+                            {"chat_id": pilot.chat_id, "pair": signal["pair"],
+                             "style": signal["style"]}, signal):
+                        continue
                     await send(pilot.chat_id, signal, source="autopilot")
 
         # Resolve any open signals that hit SL/TP or expired (first-touch).

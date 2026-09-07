@@ -619,16 +619,12 @@ class Bot:
                            type(exc).__name__, exc)
             reason = str(exc)
             if reason.startswith("quality gate:"):
-                # 3B rejection: the feed exists but is stale/gapped/implausible.
-                # Say why, so a quiet market reads as a data problem with an
-                # action, not as the bot being broken.
-                whats = reason.split("quality gate:", 1)[1].strip()
-                text = (f"\U0001f4c8 <b>{escape(pair)}</b> \u2014 the {style} "
-                        f"feed is not fresh enough to signal on right now."
-                        f"\n\n{escape(whats)}\n\nThis usually means the market "
-                        f"is closed or the provider went quiet. Try the "
-                        f"<b>swing</b> style (daily bars) or retry when the "
-                        f"market reopens.")
+                # 3B rejection: the feed exists but is stale/gapped/implausible
+                # (stale), scalping outside its window (session), the venue
+                # is halted (closed) or the live spread eats the ATR
+                # (viability). Each gets its own copy so a quiet market reads
+                # as schedule or data with an action, not a broken bot.
+                text = msg.quality_gate_text(pair, style, reason)
             else:
                 text = (f"\U0001f9f9 Analysis hiccup for <b>{escape(pair)}</b> \u2014 "
                         "the data feed stumbled. Tap retry in a few seconds.")

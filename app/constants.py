@@ -245,18 +245,87 @@ SPREAD_ESTIMATES = {
     "ENAUSD": 10, "ONDOUSD": 10, "AAVEUSD": 8, "UNIUSD": 8,
     "XLMUSD": 6, "VETUSD": 10, "ICPUSD": 10, "HBARUSD": 8,
 }
+# Phase 2B: realistic static fallbacks per asset class, used ONLY when the
+# live OANDA spread is unavailable (Yahoo-served pairs). They replace the old
+# flat 25 bps that over-widened every FX/metals stop and hid the spread from
+# the R:R. Live-measured spreads supersede these entirely for OANDA pairs.
+SPREAD_CLASS_FALLBACK_BPS = {
+    "forex": 2, "cfd": 3, "stock": 8, "crypto": 10,
+}
+
+
+def _pair_class(pair):
+    s = pair.upper()
+    if s in CRYPTO_UNIVERSE or s.endswith(("USDT", "USDC")):
+        return "crypto"
+    if s in CFD_UNIVERSE:
+        return "cfd"
+    if s in FX_UNIVERSE:
+        return "forex"
+    if s in STOCK_UNIVERSE:
+        return "stock"
+    return None
 
 
 def spread_bps(pair):
-    """Phase-3E spread estimate for a pair. Crypto majors lean single-digit
-    bps, everything unknown gets the conservative default (which widens SL
-    by a still-tiny fraction of price on big-TF styles)."""
+    """Static spread estimate for a pair, in basis points of price.
+
+    Precedence: per-pair table -> per-class fallback (FX/metals now use
+    realistic single-digit bps instead of the flat 25) -> conservative
+    default for unknown symbols."""
     s = pair.upper()
     if s in SPREAD_ESTIMATES:
         return SPREAD_ESTIMATES[s]
-    if s in FX_UNIVERSE or s in CFD_UNIVERSE or s in CRYPTO_UNIVERSE:
-        return SPREAD_ESTIMATES.get(s, SPREAD_DEFAULT_BPS)
+    cls = _pair_class(s)
+    if cls in SPREAD_CLASS_FALLBACK_BPS:
+        return SPREAD_CLASS_FALLBACK_BPS[cls]
     return SPREAD_DEFAULT_BPS
+
+
+# Phase 2C: the live spread / ATR ratio ceiling per style. Above this the
+# measured bid/ask spread is a material fraction of the bar's own range and
+# the stop widening turns "set and forget" into "erase the account", so the
+# gate rejects instead of printing a fictionally-wide R:R. Crypto has no
+# spread basis (binance mid) and is never gated by this.
+SPREAD_ATR_MAX = {"scalping": 0.35, "intraday": 0.20, "swing": 0.10}
+
+# Phase 3A: scalping windows per asset class (UTC minutes-of-day). The
+# north-star is that scalping needs the tightest possible live spread, which
+# only exists inside London/NY liquidity. Crypto is 24/7 and never gated.
+SCALP_SESSIONS = {
+    "metals": {
+        "windows": ((7 * 60, 16 * 60),),
+        "preferred": ((12 * 60, 16 * 60),),
+        "label": "the London/NY window (07:00\u201316:00 UTC)",
+    },
+    "fx_major": {
+        "windows": ((7 * 60, 21 * 60),),
+        "preferred": ((12 * 60, 16 * 60),),
+        "label": "the London/NY window (07:00\u201321:00 UTC)",
+    },
+    "fx_other": {
+        "windows": ((7 * 60, 16 * 60),),
+        "preferred": ((12 * 60, 16 * 60),),
+        "label": "the London window (07:00\u201316:00 UTC)",
+    },
+}
+
+# Majors carry the deepest book; crosses/EMs trade thinner and stop earlier.
+SCALP_CLASS_MAJORS = {"EURUSD", "GBPUSD", "USDJPY", "USDCHF",
+                      "AUDUSD", "NZDUSD", "USDCAD"}
+
+
+def scalp_class(pair):
+    """Session class for scalping-window gating: 'metals', 'fx_major',
+    'fx_other', 'crypto' or None (stocks/unknown never scalp)."""
+    s = pair.upper()
+    if s in CRYPTO_UNIVERSE or s.endswith(("USDT", "USDC")):
+        return "crypto"
+    if s in CFD_UNIVERSE:  # XAUUSD/XAGUSD
+        return "metals"
+    if s in FX_UNIVERSE:
+        return "fx_major" if s in SCALP_CLASS_MAJORS else "fx_other"
+    return None
 
 CRYPTO_REVERSE_URL = {
     "BTCUSD": "https://www.blockchain.com/explorer/transactions/btc",

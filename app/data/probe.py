@@ -51,6 +51,8 @@ def probe_pair(hub, pair, tf=PROBE_TF, limit=PROBE_LIMIT):
         "oanda_ok": False,
         "oanda_error": None,
         "oanda_age_s": None,
+        "oanda_bam_ok": None,
+        "oanda_spread": None,
         "served_by": None,
         "tier": None,
         "fresh_ok": None,
@@ -67,11 +69,18 @@ def probe_pair(hub, pair, tf=PROBE_TF, limit=PROBE_LIMIT):
     if inst is not None and getattr(hub, "oanda", None) is not None:
         out["oanda_base"] = _base_url(config.oanda_environment())
         try:
-            cs = hub.oanda.fetch_klines(inst, tf, limit)
+            # require_bam=False: mid-only is still evidence the feed is up;
+            # the report flags the missing spread separately (scalping would
+            # be blocked when the hub itself demands BAM).
+            cs = hub.oanda.fetch_klines(inst, tf, limit,
+                                        require_bam=False)
             out["oanda_ok"] = bool(cs)
             if cs:
                 out["oanda_age_s"] = max(
                     0.0, (now_ms - cs[-1]["ts"]) / 1000.0)
+                sc = _prov.spread_context(cs)
+                out["oanda_bam_ok"] = sc is not None
+                out["oanda_spread"] = sc["latest"] if sc is not None else None
         except Exception as exc:
             out["oanda_error"] = f"{type(exc).__name__}: {exc}"
 
@@ -91,6 +100,10 @@ def probe_pair(hub, pair, tf=PROBE_TF, limit=PROBE_LIMIT):
     out["fresh_ok"], out["fresh_reason"] = freshness.check(candles, tf, now_ms)
     out["scalp_ok"], out["scalp_reason"] = quality.may_emit(
         pair, "scalping", candles=candles)
+    if out["scalp_ok"] and source == "oanda" and not out["oanda_bam_ok"]:
+        out["scalp_ok"] = False
+        out["scalp_reason"] = ("OANDA feed has no bid/ask spread data "
+                               "(BAM missing) \u2014 scalping needs it")
     last = candles[-1]
     out["last_age_s"] = max(0.0, (now_ms - last["ts"]) / 1000.0)
     out["last_price"] = last["close"]

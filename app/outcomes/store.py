@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS signals (
     component_scores TEXT NOT NULL DEFAULT '{}',
     data_source TEXT NOT NULL DEFAULT 'live',
     spread_estimate REAL,
+    spread_unit TEXT,
     status TEXT NOT NULL DEFAULT 'open',
     same_candle_ambig INTEGER NOT NULL DEFAULT 0,
     resolved_at REAL,
@@ -59,8 +60,18 @@ class OutcomeStore:
         try:
             con.execute("PRAGMA journal_mode=WAL")
             con.executescript(SCHEMA)
+            self._migrate(con)
         finally:
             con.close()
+
+    @staticmethod
+    def _migrate(con):
+        """Forward-migrate existing databases. Columns are added when missing
+        (older rows keep NULL); nothing is ever dropped."""
+        cols = {r[1] for r in con.execute(
+            "PRAGMA table_info(signals)").fetchall()}
+        if "spread_unit" not in cols:
+            con.execute("ALTER TABLE signals ADD COLUMN spread_unit TEXT")
 
     @contextmanager
     def _conn(self):
@@ -71,15 +82,16 @@ class OutcomeStore:
         finally:
             con.close()
 
-    def record(self, chat_id, signal, source="watch"):
+    def record(self, chat_id, signal, source="watch", status="open"):
         """Insert one delivered signal. Returns the new row id."""
         ind = signal.get("component_scores") or {}
         with self._conn() as db:
             cur = db.execute(
                 "INSERT INTO signals (chat_id, source, created_at, pair, style, "
                 "mode, direction, entry, stop_loss, tp1, tp2, rr_target, "
-                "confidence, component_scores, data_source, spread_estimate) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "confidence, component_scores, data_source, spread_estimate, "
+                "spread_unit, status) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (int(chat_id), source, float(signal["ts"]),
                  str(signal["pair"]).upper(), signal["style"],
                  signal["mode"], signal["side"], float(signal["entry"]),
@@ -88,8 +100,19 @@ class OutcomeStore:
                  json.dumps({k: v for k, v in ind.items() if v is not None},
                             default=str),
                  str(signal.get("data_mode", "live")),
-                 signal.get("spread_estimate")))
+                 signal.get("spread_estimate"),
+                 signal.get("spread_unit"), status))
             return cur.lastrowid
+
+    def record_shadow(self, chat_id, signal, source="watch"):
+        """Persist a shadow-mode scalping candidate (Phase 6B): computed and
+        logged exactly like a real signal but sent to nobody. status (and the
+        data_source column's shadow marker) keep it invisible to the resolver
+        (status='open') and to calibration/stats (live rows, status!='open'
+        plus a not-shadow filter)."""
+        sig = dict(signal)
+        sig["data_mode"] = "shadow"
+        return self.record(chat_id, sig, source, status="shadow")
 
     def query(self, sql, params=()):
         """Public read helper returning rows as dicts (calibration/analytics)."""
@@ -125,16 +148,20 @@ class OutcomeStore:
                "avg_r": None, "total_r": None, "worst_streak": 0,
                "by_style": [], "by_mode": [], "by_pair": [], "conf_buckets": []}
         with self._conn() as db:
+            # shadow captures (Phase 6B) are dry runs: never counted as
+            # delivered signals or calibration fuel.
             row = db.execute(
                 "SELECT COUNT(*), COALESCE(SUM(status='open'),0), "
-                "COALESCE(SUM(status!='open'),0) FROM signals").fetchone()
+                "COALESCE(SUM(status!='open' AND status!='shadow'),0) "
+                "FROM signals WHERE status!='shadow'").fetchone()
             if not row or not row[0]:
                 return out
             out.update(total=row[0], open=row[1], resolved=row[2])
             agg = db.execute(
                 "SELECT COUNT(*), AVG(r_multiple), SUM(r_multiple), "
                 "COALESCE(SUM(r_multiple>0.0),0) "
-                "FROM signals WHERE status!='open' AND r_multiple IS NOT NULL"
+                "FROM signals WHERE status!='open' AND status!='shadow' "
+                "AND r_multiple IS NOT NULL"
             ).fetchone()
             n, avg_r, tot_r, wins = agg
             if n:
@@ -144,7 +171,8 @@ class OutcomeStore:
             streak = best = 0
             for r in db.execute(
                     "SELECT r_multiple FROM signals WHERE status!='open' "
-                    "AND r_multiple IS NOT NULL ORDER BY created_at, id"):
+                    "AND status!='shadow' AND r_multiple IS NOT NULL "
+                    "ORDER BY created_at, id"):
                 streak = 0 if r[0] > 0 else streak + 1
                 best = max(best, streak)
             out["worst_streak"] = best
@@ -157,11 +185,13 @@ class OutcomeStore:
                      "avg_r": row0[4]}
                     for row0 in db.execute(
                         f"SELECT {col}, COUNT(*), "
-                        "COALESCE(SUM(status!='open'),0), "
-                        "COALESCE(SUM(status!='open' AND r_multiple>0.0),0), "
-                        "AVG(CASE WHEN status!='open' AND r_multiple IS NOT NULL "
-                        "THEN r_multiple END) "
-                        f"FROM signals GROUP BY {col} ORDER BY 4 DESC").fetchall()
+                        "COALESCE(SUM(status!='open' AND status!='shadow'),0), "
+                        "COALESCE(SUM(status!='open' AND status!='shadow' "
+                        "AND r_multiple>0.0),0), "
+                        "AVG(CASE WHEN status!='open' AND status!='shadow' "
+                        "AND r_multiple IS NOT NULL THEN r_multiple END) "
+                        f"FROM signals WHERE status!='shadow' GROUP BY {col} "
+                        "ORDER BY 4 DESC").fetchall()
                 ]
 
             out["by_style"] = group("style")
@@ -169,9 +199,10 @@ class OutcomeStore:
             out["by_pair"] = group("pair")[:8]
             for lo, n, resolved, wins in db.execute(
                     "SELECT CAST(confidence/20 AS INT)*20, COUNT(*), "
-                    "COALESCE(SUM(status!='open'),0), "
-                    "COALESCE(SUM(status!='open' AND r_multiple>0.0),0) "
-                    "FROM signals GROUP BY 1 ORDER BY 1"):
+                    "COALESCE(SUM(status!='open' AND status!='shadow'),0), "
+                    "COALESCE(SUM(status!='open' AND status!='shadow' "
+                    "AND r_multiple>0.0),0) "
+                    "FROM signals WHERE status!='shadow' GROUP BY 1 ORDER BY 1"):
                 out["conf_buckets"].append({
                     "lo": lo, "n": n, "resolved": resolved, "wins": wins,
                     "win_pct": 100.0 * wins / resolved if resolved else None,

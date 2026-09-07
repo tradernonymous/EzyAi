@@ -1,4 +1,5 @@
 import contextlib
+import json
 import logging
 import random
 import time
@@ -10,6 +11,58 @@ from ..data.provider import DataHub
 from . import engine as signal_engine
 
 logger = logging.getLogger(__name__)
+
+
+def lifecycle_block(store, chat_id, pair, style, signal):
+    """Phase-4 cooldown gate shared by watch ticks and autopilot.
+
+    Scans the chat's recent history for (pair, style):
+      * an OPEN signal (any direction) suppresses new ones -- one position
+        at a time per symbol,
+      * after it resolves, price must travel at half an ATR away from the
+        last entry before an identical re-entry (zone re-arm), so a setup
+        that never broke down is not re-announced at the same price,
+      * shadow captures are informational and never block.
+
+    store None (test seams, broken DB) passes everything. Returns
+    (blocked, reason)."""
+    if store is None:
+        return False, None
+    try:
+        rows = store.query(
+            "SELECT * FROM signals WHERE chat_id=? AND pair=? AND style=? "
+            "ORDER BY created_at DESC, id DESC LIMIT 10",
+            (int(chat_id), str(pair).upper(), style))
+    except Exception as exc:
+        logger.warning("lifecycle gate query failed: %s: %s",
+                       type(exc).__name__, exc)
+        return False, None
+    if not rows:
+        return False, None
+    for r in rows:
+        if r.get("status") == "open":
+            return True, (f"prior {style} signal for {pair} is still open "
+                          f"(entry {r.get('entry')})")
+    last = rows[0]
+    if last.get("status") == "shadow":
+        return False, None
+    atr = _atr_of(last)
+    cur = (signal.get("component_scores") or {}).get("close")
+    if atr and cur is not None and \
+            abs(float(cur) - float(last["entry"])) <= 0.5 * atr:
+        return True, (f"price still inside the last {style} zone for {pair} "
+                      f"(entry {last['entry']:.6g} \u00b1 "
+                      f"{0.5 * atr:.4g}) \u2014 wait for the re-arm")
+    return False, None
+
+
+def _atr_of(row):
+    try:
+        data = json.loads(row.get("component_scores") or "{}")
+    except Exception:
+        return None
+    atr = data.get("atr")
+    return float(atr) if atr else None
 
 
 class AutoPilot:
@@ -52,7 +105,7 @@ class AutoPilot:
         self._cursor = i % len(order)
         return out
 
-    def run(self, daily_counters, lock=None):
+    def run(self, daily_counters, lock=None, store=None):
         """Scan SCAN_BATCH pairs, keep the single best candidate. Scanned
         pairs are remembered so the cursor genuinely rotates; a raw always
         beats a qualified signal with a lower confidence, and no pair is
@@ -103,6 +156,16 @@ class AutoPilot:
 
         if best is None:
             return None, None
+
+        # 4C cooldown runs BEFORE the daily cap is spent: a signal that is
+        # suppressed by an open position or an un-re-armed zone never
+        # consumes the user's allowance.
+        blocked, why = lifecycle_block(store, self.chat_id, best["pair"],
+                                       best["style"], best)
+        if blocked:
+            logger.info("autopilot cooldown %s %s: %s", best["pair"],
+                        best["style"], why)
+            return None, "signal cooldown"
 
         counter["count"] += 1
         with guard:

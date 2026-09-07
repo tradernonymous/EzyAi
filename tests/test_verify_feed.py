@@ -3,6 +3,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.data import probe as probe_mod  # noqa: E402
@@ -11,18 +13,34 @@ from app.formatting import message as msg  # noqa: E402
 
 
 class _FakeOanda:
-    def __init__(self, ok=True):
+    def __init__(self, ok=True, bam=True):
         self.ok = ok
+        self.bam = bam
         self.rows = None
 
-    def fetch_klines(self, inst, tf, limit=200):
+    def fetch_klines(self, inst, tf, limit=200, require_bam=False):
         if not self.ok:
             raise RuntimeError("401 Unauthorized")
         now = int(time.time() * 1000)
-        self.rows = [make_candle(now - 30_000, 1.08, 1.09, 1.07, 1.085, 10.0),
-                     make_candle(now - 10_000, 1.085, 1.09, 1.08, 1.088,
-                                 10.0)]
+        self.rows = [
+            _bam_candle(now - 30_000, 1.08, 1.09, 1.07, 1.085, self.bam),
+            _bam_candle(now - 10_000, 1.085, 1.09, 1.08, 1.088, self.bam),
+        ]
         return list(self.rows)
+
+
+def _bam_candle(ts, o, h, low, c, bam=True):
+    if not bam:
+        return make_candle(ts, o, h, low, c, 10.0)
+    return {
+        "ts": ts, "open": o, "high": h, "low": low, "close": c,
+        "volume": 10.0, "complete": True,
+        "mid": {"o": o, "h": h, "l": low, "c": c},
+        "bid": {"o": o - 0.0002, "h": h - 0.0002, "l": low - 0.0002,
+                "c": c - 0.0002},
+        "ask": {"o": o + 0.0002, "h": h + 0.0002, "l": low + 0.0002,
+                "c": c + 0.0002},
+    }
 
 
 class _FakeHub:
@@ -60,12 +78,27 @@ def test_probe_healthy_oanda(monkeypatch):
     assert p["oanda_enabled"] is True
     assert p["oanda_instrument"] == "EUR_USD"
     assert p["oanda_ok"] is True
+    assert p["oanda_bam_ok"] is True
+    assert p["oanda_spread"] == pytest.approx(0.0004)
     assert p["oanda_error"] is None
     assert p["served_by"] == "oanda"
     assert p["tier"] == "realtime"
     assert p["fresh_ok"] is True
     assert p["scalp_ok"] is True
     assert p["last_price"] == 1.088
+
+
+def test_probe_oanda_no_bid_ask_blocks_scalp(monkeypatch):
+    """BAM feed that lost its spread data must never fudge a scalp: the
+    probe reports the gap and scalping is blocked even though the tier is
+    realtime."""
+    monkeypatch.setenv("OANDA_ENVIRONMENT", "practice")
+    p = _probe(_FakeHub(oanda=_FakeOanda(ok=True, bam=False)), monkeypatch)
+    assert p["served_by"] == "oanda"
+    assert p["tier"] == "realtime"
+    assert p["oanda_bam_ok"] is False
+    assert p["scalp_ok"] is False
+    assert "bid/ask" in p["scalp_reason"]
 
 
 def test_probe_oanda_down_falls_back_to_yahoo(monkeypatch):
