@@ -96,6 +96,7 @@ class Bot:
         a.add_handler(CommandHandler("plans", self.cmd_plans))
         a.add_handler(CommandHandler("account", self.cmd_account))
         a.add_handler(CommandHandler("export", self.cmd_export))
+        a.add_handler(CommandHandler("stats", self.cmd_stats))
         a.add_handler(CommandHandler("redeem", self.cmd_redeem))
         a.add_handler(CommandHandler("mkcode", self.cmd_mkcode))
         a.add_handler(CommandHandler("codes", self.cmd_codes))
@@ -146,9 +147,16 @@ class Bot:
 
     async def _job(self, context):
         async def send(chat_id, signal, source="watch"):
-            await self._send_safe(
+            ok = await self._send_safe(
                 chat_id, msg.signal_message(signal, source=source),
                 reply_markup=ui.followup_keyboard(signal["pair"]))
+            if ok and self.service.outcomes is not None:
+                try:
+                    self.service.outcomes.record(chat_id, signal, source)
+                except Exception as exc:
+                    # outcome tracking must never break signal delivery
+                    logger.warning("signal record failed: %s: %s",
+                                   type(exc).__name__, exc)
         try:
             await self.service.tick(send)
         except Exception as exc:
@@ -227,6 +235,23 @@ class Bot:
         await update.effective_chat.send_document(
             io.BytesIO(data), filename=f"ezyai-state-{stamp}.json",
             caption=f"State export \u00b7 {len(data):,} bytes")
+
+    async def cmd_stats(self, update, ctx):
+        """Admin only: live outcome tracking (Phase 1: signals table)."""
+        if not self._is_admin(update):
+            return
+        store = self.service.outcomes
+        if store is None:
+            await self._reply(update, "Outcome tracking is disabled on this "
+                                      "instance (see the logs).")
+            return
+        try:
+            data = store.stats()
+        except Exception as exc:
+            logger.warning("stats query failed: %s: %s", type(exc).__name__, exc)
+            await self._reply(update, "Could not read outcome stats right now.")
+            return
+        await self._reply(update, msg.stats_report(data))
 
     async def _reply(self, update, text, **kw):
         if not text:

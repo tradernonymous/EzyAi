@@ -32,6 +32,10 @@ def evaluate(analysis):
         if analysis["side"] == "short" and hist > 0:
             return None
 
+    ind = analysis["ind"]
+    bb = ind.get("bb") or {}
+    stoch = ind.get("stoch") or {}
+    trend = analysis.get("trend") or {}
     return {
         "pair": analysis["pair"],
         "side": analysis["side"],
@@ -54,6 +58,16 @@ def evaluate(analysis):
         "resistance": analysis["levels"]["resistance"],
         "ts": time.time(),
         "data_mode": analysis["data_mode"],
+        # Confidence inputs at emission time, stored verbatim for Phase-4
+        # calibration (confidence = 12 base + 22 trend + 15 adx + 15 macd +
+        # 15 rsi + 12 bb-mid + 9 stoch, times mode aggression).
+        "component_scores": {
+            "ema21": ind.get("ema21"), "ema50": ind.get("ema50"),
+            "adx": trend.get("adx"), "macd_hist": ind.get("macd_hist"),
+            "rsi": ind.get("rsi"), "bb_mid": bb.get("mid"),
+            "stoch_k": stoch.get("k"), "atr": ind.get("atr"),
+            "close": spec["market"], "gate": gate,
+        },
     }
 
 

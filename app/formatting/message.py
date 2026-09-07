@@ -537,6 +537,53 @@ def news_block(news):
     return "\n".join(lines)
 
 
+def stats_report(s):
+    """Admin /stats: what the tracked signals table has learned."""
+    if not s.get("total"):
+        return ("\U0001f4ca <b>SIGNAL STOCKS</b>\n"
+                "No delivered signals tracked yet. Outcomes begin counting "
+                "with the first watch/autopilot alert on this instance.")
+    lines = ["\U0001f4ca <b>SIGNAL STOCKS</b>",
+             f"{s.get('total', 0):,} signals \u00b7 "
+             f"{s.get('open', 0):,} open \u00b7 {s.get('resolved', 0):,} resolved"]
+    wr = s.get("win_rate_pct")
+    ar = s.get("avg_r")
+    tr = s.get("total_r")
+    if wr is not None:
+        lines.append(f"Hit rate <b>{wr:.1f}%</b> \u00b7 avg <b>{ar:+.2f}R</b> "
+                     f"\u00b7 total <b>{tr:+.1f}R</b> "
+                     f"\u00b7 worst streak <b>{s.get('worst_streak', 0)}</b>")
+    for label, key in (("By style", "by_style"), ("By mode", "by_mode")):
+        rows = s.get(key) or []
+        if rows:
+            lines.append("")
+            lines.append(f"<b>{label}</b>")
+            for r in rows:
+                w = f"{r['win_pct']:.0f}%" if r["win_pct"] is not None else "-"
+                a = f"{r['avg_r']:+.2f}R" if r["avg_r"] is not None else "-"
+                lines.append(f"\u2022 {r['k']} \u00b7 n={r['n']} \u00b7 "
+                             f"win {w} \u00b7 avg {a}")
+    pairs = s.get("by_pair") or []
+    if pairs:
+        lines.append("")
+        lines.append("<b>Most active pairs</b>")
+        for r in pairs:
+            w = f"{r['win_pct']:.0f}%" if r["win_pct"] is not None else "-"
+            lines.append(f"\u2022 {r['k']} \u00b7 n={r['n']} \u00b7 win {w}")
+    buckets = [b for b in (s.get("conf_buckets") or []) if b.get("n")]
+    if buckets and any(b.get("resolved") for b in buckets):
+        lines.append("")
+        lines.append("<b>By confidence score</b>")
+        for b in buckets:
+            w = f"{b['win_pct']:.0f}%" if b["win_pct"] is not None else "-"
+            lines.append(f"\u2022 {b['lo']:3d}\u2013{b['lo'] + 19:3d} \u00b7 "
+                         f"n={b['n']} \u00b7 resolved={b['resolved']} \u00b7 win {w}")
+    lines.append("")
+    lines.append("\u2139 First-touch resolution: SL < TP1 < TP2 (same-bar "
+                 "SL+TP counts as SL), no-touch expires by style window.")
+    return "\n".join(lines)
+
+
 def watch_list(rows):
     if not rows:
         return ("No active watches yet \u2014 add your first alert with "

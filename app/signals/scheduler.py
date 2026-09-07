@@ -82,6 +82,19 @@ class Service:
         # activations and watch edits can never clobber each other.
         self._lock = threading.RLock()
         self._load()
+        # Signal outcome tracking lives beside the state file. A database
+        # failure must never take the bot down: recording degrades to a
+        # logged no-op (bots flag it) and the resolver stays off.
+        self.outcomes = None
+        self.resolver = None
+        try:
+            from ..outcomes import OutcomeStore, Resolver
+            store = OutcomeStore(self.state_path.with_name("signals.db"))
+            self.outcomes = store
+            self.resolver = Resolver(store, hub)
+        except Exception as exc:
+            logger.warning("signal outcome store disabled: %s: %s",
+                           type(exc).__name__, exc)
 
     # -- alerts -----------------------------------------------------------
     def _alert(self, key, text):
@@ -788,6 +801,14 @@ class Service:
                 self._try_save()
                 if info is None:
                     await send(pilot.chat_id, signal, source="autopilot")
+
+        # Resolve any open signals that hit SL/TP or expired (first-touch).
+        if self.resolver is not None:
+            try:
+                await self.resolver.run()
+            except Exception as exc:
+                logger.warning("resolver pass failed: %s: %s",
+                               type(exc).__name__, exc)
 
     def watch_view(self):
         with self._lock:
