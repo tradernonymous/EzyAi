@@ -135,3 +135,84 @@ def test_ticker_carries_its_own_mode():
     hub.binance.validate = lambda s: (_ for _ in ()).throw(IOError("offline"))
     tick = hub.fetch_ticker("BTCUSD")
     assert tick["mode"] == "demo" and tick["symbol"] == "BTCUSD"
+
+
+def _spot_candles(n=60, start=1_700_000_000_000):
+    return [make_candle(start + i * 300_000, 1.0, 1.1, 0.9, 1.0, 1.0)
+            for i in range(n)]
+
+
+def _gold_hub():
+    """Hub whose spot metal ticker 404s and whose futures ticker serves."""
+    hub = DataHub()
+    hub.binance.validate = lambda s: False
+    calls = {"spot": 0, "fut": 0}
+
+    def cfd_klines(symbol, interval, limit=200):
+        if symbol == "XAUUSD=X":
+            calls["spot"] += 1
+            raise _HTTPError(404)
+        calls["fut"] += 1
+        return _spot_candles()[-limit:]
+
+    hub.cfd.fetch_klines = cfd_klines
+    return hub, calls
+
+
+def test_spot_metal_404_is_remembered_and_fallback_serves():
+    hub, calls = _gold_hub()
+    a, mode = hub.fetch_klines_ex("XAUUSD", "5m", 50)
+    assert mode == "live" and len(a) == 50 and a[-1]["source"] == "yahoo"
+    assert calls == {"spot": 1, "fut": 1}
+    # a different interval misses the klines cache but not the dead memo:
+    # the spot ticker is not asked again, the fallback answers directly
+    b, _ = hub.fetch_klines_ex("XAUUSD", "15m", 50)
+    assert len(b) == 50
+    assert calls == {"spot": 1, "fut": 2}
+    tick = hub.fetch_ticker("XAUUSD")
+    assert tick["symbol"] == "XAUUSD" and tick["mode"] == "live"
+    assert calls["spot"] == 1
+
+
+def test_dead_venue_memo_expires(monkeypatch):
+    hub, calls = _gold_hub()
+    hub.fetch_klines_ex("XAUUSD", "5m", 50)
+    assert calls["spot"] == 1
+    now = prov.time.time()
+    monkeypatch.setattr(prov.time, "time",
+                        lambda: now + DataHub.DEAD_TTL + 1)
+    hub.fetch_klines_ex("XAUUSD", "1h", 50)
+    assert calls["spot"] == 2  # memo lapsed: spot ticker gets another try
+
+
+def test_only_404_marks_a_venue_dead():
+    hub = DataHub()
+    hub.binance.validate = lambda s: False
+    calls = {"spot": 0}
+
+    def cfd_klines(symbol, interval, limit=200):
+        if symbol == "XAUUSD=X":
+            calls["spot"] += 1
+            raise _HTTPError(503)
+        return _spot_candles()
+
+    hub.cfd.fetch_klines = cfd_klines
+    hub.fetch_klines_ex("XAUUSD", "5m", 50)
+    hub.fetch_klines_ex("XAUUSD", "15m", 50)
+    assert calls["spot"] == 2  # an outage is not a missing ticker
+    assert not hub._venue_dead("XAUUSD=X")
+
+
+def test_futures_only_cfd_404_is_a_real_failure():
+    hub = DataHub()
+    hub.binance.validate = lambda s: False
+    hub.cfd.fetch_klines = lambda *a, **k: (_ for _ in ()).throw(_HTTPError(404))
+    with pytest.raises(_HTTPError):
+        hub.fetch_klines_ex("WTI", "5m", 50)
+    assert not hub._dead
+
+
+def test_yahoo_events_param_is_not_pre_encoded():
+    import inspect
+    src = inspect.getsource(prov.YahooProvider.fetch_klines)
+    assert '"capitalGain,div"' in src and "%2C" not in src
