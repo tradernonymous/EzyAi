@@ -201,7 +201,7 @@ def test_reference_lib_is_dev_only():
         assert name != "ta", "ta must stay dev-only (requirements-dev.txt)"
     app_dir = Path(__file__).resolve().parent.parent / "app"
     for py in app_dir.rglob("*.py"):
-        for line in py.read_text().splitlines():
+        for line in py.read_text(encoding="utf-8").splitlines():
             s = line.strip()
             assert not re.match(r"(import ta\b|from ta[\s.])", s), \
                 f"runtime import of ta in {py.name}: {s}"

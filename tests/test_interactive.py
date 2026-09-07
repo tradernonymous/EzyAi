@@ -22,7 +22,9 @@ def test_no_reply_keyboard_anywhere():
     import re
     app_dir = Path(__file__).resolve().parent.parent / "app"
     for py in app_dir.rglob("*.py"):
-        for line in py.read_text().splitlines():
+        # Python sources are UTF-8; read explicitly so Windows' cp1252
+        # locale doesn't choke on non-ASCII docstrings/emoji bytes.
+        for line in py.read_text(encoding="utf-8").splitlines():
             assert "ReplyKeyboardMarkup" not in line, f"{py.name}: {line}"
             assert not re.match(r"\s*main_keyboard\s*\(", line)
 
