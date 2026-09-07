@@ -22,6 +22,7 @@ STYLE_PROFILE = {
         "label": "Scalping",
         "base_tf": "5m",
         "direction_tf": "15m",
+        "confirm_tf": "1h",
         "check_interval_s": 60,
         "min_gap_s": 900,
         "candles": 150,
@@ -31,6 +32,7 @@ STYLE_PROFILE = {
         "label": "Intraday",
         "base_tf": "15m",
         "direction_tf": "1h",
+        "confirm_tf": "1d",
         "check_interval_s": 300,
         "min_gap_s": 3600,
         "candles": 150,
@@ -40,6 +42,7 @@ STYLE_PROFILE = {
         "label": "Swing",
         "base_tf": "1d",
         "direction_tf": "1d",
+        "confirm_tf": "1d",
         "check_interval_s": 1800,
         "min_gap_s": 21600,
         "candles": 200,
@@ -89,14 +92,23 @@ CONFIDENCE_GATE = 62
 # Revisit only with calibration proof (Phase 4).
 CONFLUENCE_SCORING = False
 
+# Phase-2 (approved) confirm-timeframe ladder. The plan's 4h/1w rungs are
+# approximated with 1d: Yahoo (the fallback for every venue except cross
+# crypto) has no 4h or 1wk bars -- 4h silently returns 1h and 1wk returns
+# 1d, both mislabeled. A venue discipline can later lock 4h/1w for pairs
+# on Binance where they truly exist. confirm_tf is only read for structure
+# (EMA/ADX direction) and never for a second indicator set.
+#
 # Tunable signal gates per style. Defaults reproduce the legacy hardcoded
-# thresholds exactly; Phase-2 tuning may adjust them based on backtest
-# evidence (must beat defaults AND a random baseline to ship).
+# thresholds exactly; rsi/adx/stoch/macd rules still act as FILTERS here.
+# conf_gate is retained for the offline harness only; live evaluation uses
+# SIGNAL_THRESHOLDS (per style x mode) below, which replaced the old
+# conf_gate - aggression*6 arithmetic.
 #   rsi_long/rsi_short: (lo, hi) healthy zones
 #   adx_min:           minimum ADX for the strength bonus / trend filter
 #   stoch_cut:         stochastic momentum cutoff (long: k > cut)
 #   macd_atr_min:      0 = sign only (legacy); >0 requires |hist| >= mult*ATR
-#   conf_gate:         base confidence gate (live gate = conf_gate - aggression*6)
+#   conf_gate:         legacy base gate, backtest comparison only
 _DEFAULT_GATES = {
     "rsi_long": (45.0, 68.0),
     "rsi_short": (30.0, 55.0),
@@ -126,6 +138,16 @@ SIGNAL_GATES = {
         "macd_atr_min": 0.0,
         "conf_gate": 70.0,
     },
+}
+
+# Phase-2 approved confidence thresholds (style x mode). They replace the
+# legacy formula `conf_gate - aggression*6`; aggression now lives entirely
+# in this table so Safe/Normal/Aggressive mean the same thing everywhere.
+#   scalping 72/64/56, intraday 76/68/60, swing 80/72/64
+SIGNAL_THRESHOLDS = {
+    "scalping": {"safe": 72.0, "normal": 64.0, "aggressive": 56.0},
+    "intraday": {"safe": 76.0, "normal": 68.0, "aggressive": 60.0},
+    "swing":    {"safe": 80.0, "normal": 72.0, "aggressive": 64.0},
 }
 
 CRYPTO_UNIVERSE = [
@@ -187,6 +209,13 @@ ALL_UNIVERSE = (
     + STOCK_UNIVERSE
     + list(CFD_UNIVERSE.keys())
 )
+
+# Phase-2 ranked scanner: pairs analyzed per autopilot run, round-robined
+# across ALL_UNIVERSE with a seeded per-chat shuffle so busy rows spread
+# load. Budgeted against the Yahoo rate (~12 live calls/min): three pairs at
+# ~3 timeframes each stays inside one short burst, and confirm/direction
+# callbacks hit the kline cache on subsequent runs.
+SCAN_BATCH = 3
 
 CRYPTO_REVERSE_URL = {
     "BTCUSD": "https://www.blockchain.com/explorer/transactions/btc",

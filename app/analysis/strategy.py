@@ -134,6 +134,142 @@ def _confidence(side, candles, closes, trend, macd_hist, rsi_v, bb_mid, stoch_k,
     return _confidence_from(side, feats, gates, reasons)
 
 
+def _structure_direction(candles):
+    """EMA-stack + MACD of a series -> ('up'|'down'|'neutral', adx)."""
+    if not candles or len(candles) < 60:
+        return "neutral", None
+    closes = [c["close"] for c in candles]
+    ema9 = ta.last(ta.ema(closes, 9))
+    ema21 = ta.last(ta.ema(closes, 21))
+    ema50 = ta.last(ta.ema(closes, 50))
+    _, _, macd_h = ta.macd(closes)
+    direction, _, _ = _direction_from(ema9, ema21, ema50, ta.last(macd_h))
+    return direction, ta.last(ta.adx(candles))
+
+
+def _cross_score(side, confirm, pair, confirm_tf, hub):
+    """Cross-asset tilt (5 points max): crypto majors lean on the BTC regime
+    on the same confirm timeframe; every other asset has no reliable live
+    proxy here and keeps the neutral midpoint (2.5). Never raises: any
+    failure degrades to neutral."""
+    try:
+        kind = hub.classify(pair)
+    except Exception:
+        kind = None
+    if kind != constants.KIND_CRYPTO:
+        return 2.5
+    try:
+        if pair == "BTCUSD":
+            btc_dir, _ = confirm
+        else:
+            candles, _m = hub.fetch_klines_ex("BTCUSD", confirm_tf, 150)
+            if not candles:
+                return 2.5
+            btc_dir, _ = _structure_direction(candles)
+    except Exception:
+        return 2.5
+    if btc_dir == "neutral":
+        return 2.5
+    agree = (btc_dir == "up" and side == "long") or \
+            (btc_dir == "down" and side == "short")
+    return 5.0 if agree else 0.0
+
+
+def _score(side, ctx, gates, reasons):
+    """Phase-2 weighted confidence. ctx holds precomputed inputs and the
+    weights sum to exactly 100 (base 10, HTF 25, momentum 25, vol 12,
+    levels 15, session 8, cross-asset 5 -- see constants). Returns 0-100."""
+    b = ctx["base"]
+    close, atr_v = b["close"], b["atr"]
+    score = 10.0  # base: a live, tradable setup starts here
+    notes = []
+
+    # consolidated momentum (25): trend, pace, strength, zone, position
+    if side == "long":
+        checks = (
+            ("EMA21 > EMA50", b["ema21"] and b["ema50"] and b["ema21"] > b["ema50"]),
+            ("MACD hist positive", b["macd_hist"] is not None and b["macd_hist"] > 0),
+            ("ADX trend strength", b["adx"] is not None and b["adx"] >= gates["adx_min"]),
+            ("RSI healthy bullish", b["rsi"] is not None
+             and gates["rsi_long"][0] <= b["rsi"] <= gates["rsi_long"][1]),
+            ("Above BB midline", b["bb_mid"] is not None and close > b["bb_mid"]),
+        )
+    else:
+        checks = (
+            ("EMA21 < EMA50", b["ema21"] and b["ema50"] and b["ema21"] < b["ema50"]),
+            ("MACD hist negative", b["macd_hist"] is not None and b["macd_hist"] < 0),
+            ("ADX trend strength", b["adx"] is not None and b["adx"] >= gates["adx_min"]),
+            ("RSI healthy bearish", b["rsi"] is not None
+             and gates["rsi_short"][0] <= b["rsi"] <= gates["rsi_short"][1]),
+            ("Below BB midline", b["bb_mid"] is not None and close < b["bb_mid"]),
+        )
+    for tag, cond in checks:
+        if cond:
+            score += 5.0
+            notes.append(tag)
+
+    # HTF structure (25): the confirm timeframe must agree. Conflict is hard
+    # gated in analyze(); if it still reaches here it scores zero.
+    cdx, cadx = ctx["confirm"]
+    if (cdx == "up" and side == "long") or (cdx == "down" and side == "short"):
+        score += 25.0 if (cadx is not None and cadx >= 18) else 15.0
+        notes.append(f"{ctx['confirm_tf']} confirms {side}")
+    elif cdx in ("up", "down"):
+        reasons.append(f"{ctx['confirm_tf']} opposes {side} -- gated")
+    else:
+        score += 10.0
+        notes.append(f"{ctx['confirm_tf']} flat")
+
+    # volatility regime (12)
+    ratio = ctx.get("vol_ratio")
+    if ratio is None:
+        score += 6.0
+    elif rg.VOL_DEAD_RATIO < ratio < rg.VOL_CHAOS_RATIO:
+        score += 12.0
+    elif ratio >= rg.VOL_CHAOS_RATIO:
+        score += 4.0
+        reasons.append(f"Volatility x{ratio:.1f} -- chaotic")
+    else:
+        score += 6.0
+        reasons.append(f"Volatility x{ratio:.1f} -- dead")
+
+    # level proximity (15): is price near the level in our favour?
+    # analyze passes lv.nearest() output (lists of up to 2, closest first).
+    sup = ctx["levels"][0][0] if ctx["levels"][0] else None
+    res = ctx["levels"][1][0] if ctx["levels"][1] else None
+    if side == "long" and sup:
+        d = (close - sup) / atr_v if atr_v else 9.0
+        score += 15.0 if d <= 1.0 else 10.0 if d <= 2.5 else 5.0
+    elif side == "short" and res:
+        d = (res - close) / atr_v if atr_v else 9.0
+        score += 15.0 if d <= 1.0 else 10.0 if d <= 2.5 else 5.0
+    elif side == "long" and res:  # flushed against resistance: headwind
+        d = (res - close) / atr_v if atr_v else 9.0
+        score += 0.0 if d <= 1.0 else 10.0
+    elif side == "short" and sup:
+        d = (close - sup) / atr_v if atr_v else 9.0
+        score += 0.0 if d <= 1.0 else 10.0
+    else:
+        score += 5.0
+
+    # session (8); daily bars print at 00:00 UTC so sessions are meaningless
+    if ctx.get("base_tf") == "1d":
+        score += 8.0
+    elif ctx.get("session") == "open":
+        score += 8.0
+    elif ctx.get("session") == "thin":
+        score += 4.0
+        reasons.append("Thin trading session")
+    else:
+        reasons.append("Weekend / closed venue")
+
+    # cross-asset (5)
+    score += ctx.get("cross", 2.5)
+
+    reasons.extend(notes)
+    return max(0.0, min(100.0, score))
+
+
 def analyze(pair, style, mode, hub, interval=None, sentiment=None):
     """sentiment: optional precomputed headline compound in [-1, 1] (or None).
 
@@ -144,17 +280,20 @@ def analyze(pair, style, mode, hub, interval=None, sentiment=None):
     mode_profile = constants.MODE_PROFILE[mode]
     base_tf = interval or style_profile["base_tf"]
     direction_tf = style_profile["direction_tf"]
+    confirm_tf = style_profile["confirm_tf"]
 
     fetch_ex = getattr(hub, "fetch_klines_ex", None)
     if fetch_ex is not None:
         candles, mode_a = fetch_ex(pair, base_tf, style_profile["candles"])
         dir_candles, mode_b = fetch_ex(pair, direction_tf, style_profile["candles"])
-        data_mode = "demo" if "demo" in (mode_a, mode_b) else "live"
+        conf_candles, mode_c = fetch_ex(pair, confirm_tf, style_profile["candles"])
+        data_mode = "demo" if "demo" in (mode_a, mode_b, mode_c) else "live"
     else:  # test stubs and older hubs
         candles = hub.fetch_klines(pair, base_tf, style_profile["candles"])
         dir_candles = hub.fetch_klines(pair, direction_tf, style_profile["candles"])
+        conf_candles = hub.fetch_klines(pair, confirm_tf, style_profile["candles"])
         data_mode = getattr(hub, "mode", "live")
-    if not candles or not dir_candles:
+    if not candles or not dir_candles or not conf_candles:
         raise ValueError(f"no candles for {pair}")
 
     closes = [c["close"] for c in candles]
@@ -193,6 +332,16 @@ def analyze(pair, style, mode, hub, interval=None, sentiment=None):
     else:
         reasons.append("Trend is neutral; signal quality is low")
 
+    # Phase-2 HTF confirm gate: an explicit conflicting read on the style's
+    # confirm timeframe kills the setup outright (no scoring, no spec). A
+    # flat confirm timeframe merely scores a partial 10 in _score.
+    confirm_dir, confirm_adx = _structure_direction(conf_candles)
+    confirm_conflict = ((side == "long" and confirm_dir == "down")
+                        or (side == "short" and confirm_dir == "up"))
+    if confirm_conflict:
+        side = "neutral"
+        reasons.append(f"{confirm_tf} opposes the base trend -- no signal")
+
     spec = None
     confidence = 0.0
     confluence = {"pattern": 0, "sentiment": sentiment, "vol_ratio": None,
@@ -200,61 +349,47 @@ def analyze(pair, style, mode, hub, interval=None, sentiment=None):
     if side != "neutral":
         spec = _spec(side, price, atr_v, sup_lv, res_lv, mode_profile)
         gates = constants.SIGNAL_GATES[style]
-        confidence = _confidence(side, candles, closes, direction, macd_h_l, rsi_v,
-                                 bb_mid_l, st_k_l, adx_l, reasons, gates)
-        confidence = min(100.0, confidence * (0.9 + mode_profile["aggression"] * 0.12))
         # Phase-3 confluence: factual notes always shown (zero signal
         # impact); confidence points only when CONFLUENCE_SCORING is on,
         # which requires backtest proof (currently off -- see constants).
-        scoring = constants.CONFLUENCE_SCORING
         # Feeds return the still-forming bar last; patterns need closed bars.
         bias = pat.detect(candles[:-1] if len(candles) > 3 else candles)
         confluence["pattern"] = bias
         if bias != 0:
             name = ("bullish engulfing/hammer" if bias == 1
                     else "bearish engulfing/shooting star")
-            if scoring:
-                agrees = ((bias == 1 and side == "long")
-                          or (bias == -1 and side == "short"))
-                confidence += PATTERN_POINTS if agrees else -PATTERN_POINTS
-                note = pat.describe(bias, side)
-            else:
-                note = f"Last-bar candle pattern: {name}"
-            if note:
-                reasons.append(note)
+            reasons.append(f"Last-bar candle pattern: {name}")
         if sentiment is not None and -1.0 <= sentiment <= 1.0:
-            if scoring:
-                if (sentiment > SENTIMENT_CUT and side == "long") or \
-                   (sentiment < -SENTIMENT_CUT and side == "short"):
-                    confidence += SENTIMENT_POINTS
-                elif (sentiment < -SENTIMENT_CUT and side == "long") or \
-                     (sentiment > SENTIMENT_CUT and side == "short"):
-                    confidence -= SENTIMENT_POINTS
-                note = sent.describe(sentiment)
-                reasons.append("\U0001f4f0 " + note if note else
-                               f"\U0001f4f0 Headline sentiment ({sentiment:+.2f})")
-            else:
-                reasons.append(f"\U0001f4f0 Headline sentiment ({sentiment:+.2f})")
+            reasons.append(f"\U0001f4f0 Headline sentiment ({sentiment:+.2f})")
         ratio = rg.vol_ratio(ta.realized_vol(closes), len(closes) - 1)
         confluence["vol_ratio"] = ratio
-        if scoring:
-            confidence = rg.apply_vol_regime(confidence, ratio, reasons)
-        elif ratio is not None and (ratio >= rg.VOL_CHAOS_RATIO
-                                    or ratio <= rg.VOL_DEAD_RATIO):
-            reasons.append(f"Volatility x{ratio:.1f} vs recent median")
         try:
             kind = hub.classify(pair)
         except Exception:
             kind = None
         state = rg.session_state(kind, candles[-1]["ts"]) if kind else "open"
         confluence["session"] = state
-        if scoring:
-            confidence = rg.apply_session(confidence, kind, candles[-1]["ts"], reasons)
-        elif state != "open" and base_tf != "1d":
+        if state != "open" and base_tf != "1d":
             # daily bars print at 00:00 UTC; session labels are meaningless there
             label = {"closed": "Weekend market (thin/stale quotes)",
                      "thin": "Thin trading session"}.get(state, state)
             reasons.append(f"{label} -- interpret with care")
+        # Phase-2 weighted confidence (sums to 100; see constants).
+        cross = _cross_score(side, (confirm_dir, confirm_adx), pair,
+                             confirm_tf, hub)
+        ctx = {
+            "base": {"ema21": ema21_l, "ema50": ema50_l, "adx": adx_l,
+                     "macd_hist": macd_h_l, "rsi": rsi_v, "bb_mid": bb_mid_l,
+                     "stoch_k": st_k_l, "close": price, "atr": atr_v},
+            "confirm": (confirm_dir, confirm_adx),
+            "confirm_tf": confirm_tf,
+            "levels": (sup_lv, res_lv),
+            "vol_ratio": ratio,
+            "session": state,
+            "base_tf": base_tf,
+            "cross": cross,
+        }
+        confidence = _score(side, ctx, gates, reasons)
         confidence = max(0.0, min(100.0, confidence))
 
     strength = "weak"
@@ -283,6 +418,9 @@ def analyze(pair, style, mode, hub, interval=None, sentiment=None):
         "trend": {"direction": direction, "strength": strength,
                   "align": "bull" if bull_align else ("bear" if bear_align else "mixed"),
                   "adx": adx_l},
+        "confirm": {"tf": confirm_tf, "direction": confirm_dir,
+                    "adx": confirm_adx,
+                    "agree": side != "neutral"},
         "ind": {
             "ema9": ema9_l, "ema21": ema21_l, "ema50": ema50_l,
             "rsi": rsi_v, "atr": atr_v,
@@ -295,6 +433,7 @@ def analyze(pair, style, mode, hub, interval=None, sentiment=None):
         "spec": spec,
         "confidence": float(round(confidence, 1)),
         "confluence": confluence,
+        "cross": ctx.get("cross", 2.5) if side != "neutral" else 2.5,
         "reasons": reasons,
         "exit_notes": exit_notes,
         "hold_horizon": style_profile["hold"],

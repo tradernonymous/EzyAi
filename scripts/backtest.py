@@ -15,6 +15,7 @@ Usage:
   python scripts/backtest.py --style scalping --pair BTCUSD --refresh
 """
 import argparse
+import bisect
 import json
 import math
 import os
@@ -148,6 +149,8 @@ def features(pair, kind, style, refresh=False):
     ml, ms, mh = ind.macd(closes)
     bb_mid, _, _ = ind.bollinger(closes)
     st_k, _ = ind.stochastic(base)
+    d_closes = [c["close"] for c in direction]
+    _, _, d_macd_h = ind.macd(d_closes)
     feats = {
         "base": base, "direction": direction,
         "ema9": ind.ema(closes, 9), "ema21": ind.ema(closes, 21),
@@ -156,9 +159,28 @@ def features(pair, kind, style, refresh=False):
         "stoch_k": st_k, "adx": ind.adx(base),
         "patterns": pat.pattern_bias(base),
         "roll": ind.realized_vol(closes),
+        # Phase-2 confirm-TF proxy: EMA stack of the direction series so the
+        # harness can replay the live HTF confirm gate offline.
+        "d_ts": [c["ts"] for c in direction],
+        "d_ema9": ind.ema(d_closes, 9), "d_ema21": ind.ema(d_closes, 21),
+        "d_ema50": ind.ema(d_closes, 50), "d_macd_h": d_macd_h,
     }
     _FEATS[key] = feats
     return feats
+
+
+def _d_conf_dir(feats, ts):
+    """HTF confirm direction at base-bar `ts`: read the direction-series EMA
+    stack at the last direction bar closed on/before it. Live approval uses
+    style confirm_tf (scalping 1h / intraday 1d / swing 1d); the harness uses
+    the direction series as a documented approximation - Yahoo offers no 4h or
+    1wk bars so confirm_tf collapses to those three rungs."""
+    idx = bisect.bisect_right(feats["d_ts"], ts) - 1
+    if idx < 0:
+        return "neutral"
+    return strat._direction_from(
+        feats["d_ema9"][idx], feats["d_ema21"][idx],
+        feats["d_ema50"][idx], feats["d_macd_h"][idx])[0]
 
 
 def _levels_at(direction, ts, lookback):
@@ -179,7 +201,9 @@ def simulate(pair, kind, style, gates, seed=12345, refresh=False,
     sp = constants.STYLE_PROFILE[style]
     mp = constants.MODE_PROFILE["normal"]  # backtest in normal mode only
     tf_s = constants.INTERVALS[sp["base_tf"]]
-    gate = gates["conf_gate"] - mp["aggression"] * 6
+    # Phase-2: the per-mode threshold table replaced the legacy conf_gate -
+    # aggression*6 arithmetic (backtest always walks normal mode).
+    gate = constants.SIGNAL_THRESHOLDS[style]["normal"]
     feats = features(pair, kind, style, refresh)
     base, direction = feats["base"], feats["direction"]
     n = len(base)
@@ -209,6 +233,11 @@ def simulate(pair, kind, style, gates, seed=12345, refresh=False,
         if side_dir == "neutral":
             continue
         side = "long" if side_dir == "up" else "short"
+        # Phase-2 HTF confirm gate (mirrors analyze()): an explicit opposing
+        # read on the confirm/direction series blocks the setup outright.
+        cdir = _d_conf_dir(feats, base[t]["ts"])
+        if (side == "long" and cdir == "down") or (side == "short" and cdir == "up"):
+            continue
         conf = strat._confidence_from(side, f, gates, [])
         conf = min(100.0, conf * (0.9 + mp["aggression"] * 0.12))
         # confluence replay mirrors strategy.analyze() order exactly

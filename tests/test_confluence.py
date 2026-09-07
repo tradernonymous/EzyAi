@@ -169,7 +169,10 @@ def test_display_only_scoring_off_by_default():
         assert not any("Headline sentiment" in r for r in base["reasons"])
 
 
-def test_scoring_path_still_works_when_enabled(monkeypatch):
+def test_scoring_flag_no_longer_moves_confidence(monkeypatch):
+    # Phase-2 removed the old additive confluence path: vol/session/levels/
+    # patterns feed the weighted model directly, and sentiment stays a
+    # factual note (zero signal impact) whether or not the legacy flag is on.
     import app.constants as constants
     monkeypatch.setattr(constants, "CONFLUENCE_SCORING", True)
     hub = _fixture_hub()
@@ -177,5 +180,5 @@ def test_scoring_path_still_works_when_enabled(monkeypatch):
     if base["side"] == "neutral":
         return
     up = strat.analyze("BTCUSD", "intraday", "normal", hub, sentiment=0.9)
-    assert up["confidence"] != base["confidence"]
-    assert abs(up["confidence"] - base["confidence"]) <= 8.0
+    assert up["confidence"] == base["confidence"]
+    assert any("Headline sentiment" in r for r in up["reasons"])

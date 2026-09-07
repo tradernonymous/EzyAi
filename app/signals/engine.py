@@ -16,9 +16,11 @@ def evaluate(analysis):
     if abs(spec["market"] - spec["sl"]) <= 0 or abs(spec["tp1"] - spec["market"]) <= 0:
         return None
 
-    gates = constants.SIGNAL_GATES.get(analysis.get("style", "intraday"),
-                                         {"conf_gate": constants.CONFIDENCE_GATE})
-    gate = gates["conf_gate"] - mode_profile["aggression"] * 6
+    # Phase-2 per-mode thresholds (replaced conf_gate - aggression*6; the
+    # aggression lever now lives entirely in SIGNAL_THRESHOLDS).
+    thresholds = constants.SIGNAL_THRESHOLDS.get(
+        analysis.get("style", "intraday"), constants.SIGNAL_THRESHOLDS["intraday"])
+    gate = thresholds[analysis["mode"]]
     if analysis["confidence"] < gate:
         return None
 
@@ -67,6 +69,9 @@ def evaluate(analysis):
             "rsi": ind.get("rsi"), "bb_mid": bb.get("mid"),
             "stoch_k": stoch.get("k"), "atr": ind.get("atr"),
             "close": spec["market"], "gate": gate,
+            "confirm_tf": analysis.get("confirm", {}).get("tf"),
+            "confirm_dir": analysis.get("confirm", {}).get("direction"),
+            "cross": analysis.get("cross"),
         },
     }
 
