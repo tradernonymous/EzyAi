@@ -400,3 +400,85 @@ def test_report_new_sections_and_length():
          "sent_up": 78.0, "dev_commits_4w": 1234, "supply_mined_pct": 94.5}
     t2 = msg.fundamentals_report("crypto", "BTCUSD", c, "live")
     assert "78% bullish" in t2 and "1,234 dev commits" in t2 and "94.5%" in t2
+
+
+# -- CFD card: derived series through the hub, trend structure, macro ----------
+
+class _DailyHub:
+    """DataHub stand-in: 300 rising daily closes stamped with a venue."""
+    def __init__(self, source="binance"):
+        self.calls = []
+        self.source = source
+
+    def fetch_klines(self, symbol, interval, limit=200):
+        self.calls.append((symbol, interval, limit))
+        n = 300
+        rows = [{"ts": i, "open": 0, "high": 0, "low": 0,
+                 "close": 100.0 + i * 0.5, "volume": 0} for i in range(n)]
+        rows[-1]["source"] = self.source
+        return rows[-limit:]
+
+
+def test_cfd_derived_goes_through_the_hub_by_pair():
+    hub = _DailyHub()
+    f = Fundamentals(session=_Session([]), hub=hub)
+    f.macro = lambda: {}
+    d = f.cfd("XAUUSD", tag="XAUUSD")
+    # the hub resolves the venue (spot gold via Binance); no Yahoo lookup
+    assert hub.calls == [("XAUUSD", "1d", 300)]
+    assert d["source"] == "spot via Binance, daily bars"
+    assert d["price"] == 100.0 + 299 * 0.5
+    assert d["range_pos"] == 100.0 and d["off_high_pct"] == 0.0
+    assert d["vs_sma50"] > 0 and d["vs_sma200"] > d["vs_sma50"]
+    assert d["vol_pct_1m"] is not None
+    assert d["chg_1y"] is not None
+
+
+def test_cfd_attaches_macro_and_gold_silver_ratio_for_gold_only():
+    f = Fundamentals(session=_Session([]), hub=_DailyHub(source="yahoo"))
+    f.macro = lambda: {"usd": {"last": 98.0, "chg_1m": -1.0, "delta_1m": -1.0},
+                       "silver": {"last": 50.0, "chg_1m": 0.0, "delta_1m": 0.0}}
+    gold = f.cfd("XAUUSD", tag="XAUUSD")
+    assert gold["source"] == "Yahoo daily bars"
+    assert gold["macro"]["usd"]["last"] == 98.0
+    assert abs(gold["gold_silver"] - gold["price"] / 50.0) < 1e-9
+    oil = f.cfd("WTI", tag="WTI")
+    assert "macro" not in oil and "gold_silver" not in oil
+
+
+def test_cfd_report_reads_range_trend_positioning_and_macro():
+    data = {"price": 4414.0, "high_1y": 4600.0, "low_1y": 2600.0,
+            "range_pos": 90.7, "off_high_pct": -4.04,
+            "vs_sma50": 2.1, "vs_sma200": 18.4,
+            "chg_1w": -1.9, "chg_1m": 3.2, "chg_3m": 12.5, "chg_1y": 62.0,
+            "vol_pct": 16.0, "vol_pct_1m": 21.0, "source": "spot via Binance, daily bars",
+            "cot": {"net_long": 228124, "wow": -3500, "date": "2026-09-01"},
+            "macro": {"usd": {"last": 97.8, "chg_1m": -1.2, "delta_1m": -1.2},
+                      "us10y": {"last": 4.05, "chg_1m": -2.9, "delta_1m": -0.12}},
+            "gold_silver": 66.2}
+    t = msg.fundamentals_report("cfd", "XAUUSD", data, "live", pro=True)
+    assert "91% of 1y range" in t and "4.0% below the 1y high" in t
+    assert "above 50d (+2.1%)" in t and "uptrend intact" in t
+    assert "last month 21%" in t
+    assert "Funds are trimming the long side" in t
+    assert "USD index 97.8" in t and "US 10y 4.05% (-12bp 1m)" in t
+    assert "gold/silver 66" in t and "softer dollar is a tailwind" in t
+    assert "top of its 1y range" in t
+    # the free tier keeps the tape lines and loses positioning, macro, outlook
+    lite = msg.fundamentals_report("cfd", "XAUUSD", data, "live", pro=False)
+    assert "uptrend intact" in lite and "Macro" not in lite
+    assert "Large speculators" not in lite and "Executive summary" not in lite
+    # a sparse dict (older cached shape) still renders without the new lines
+    old = {"price": 70.0, "high_1y": 90.0, "low_1y": 60.0, "chg_1w": 1.0,
+           "chg_1m": None, "chg_3m": None, "chg_1y": None, "vol_pct": 30.0}
+    t2 = msg.fundamentals_report("cfd", "WTI", old, "live", pro=True)
+    assert "Range:" not in t2 and "Trend:" not in t2 and "Executive summary" in t2
+
+
+def test_structure_words_cover_every_quadrant():
+    assert msg._structure_word(1.0, 5.0) == "uptrend intact"
+    assert msg._structure_word(9.0, 5.0) == "uptrend, stretched above the 50d"
+    assert msg._structure_word(-1.0, 5.0) == "pullback inside an uptrend"
+    assert msg._structure_word(1.0, -5.0) == "bounce inside a downtrend"
+    assert msg._structure_word(-1.0, -5.0) == "downtrend intact"
+    assert msg._structure_word(None, 5.0) is None

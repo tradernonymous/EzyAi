@@ -360,14 +360,112 @@ def outlook_crypto(symbol, data):
     return lines
 
 
+def _trend_structure_line(data):
+    """Price against its 50d and 200d averages, read as one structure."""
+    a, b = data.get("vs_sma50"), data.get("vs_sma200")
+    if a is None and b is None:
+        return None
+    bits = []
+    if a is not None:
+        bits.append(f"{'above' if a >= 0 else 'below'} 50d ({a:+.1f}%)")
+    if b is not None:
+        bits.append(f"{'above' if b >= 0 else 'below'} 200d ({b:+.1f}%)")
+    read = _structure_word(a, b)
+    return "Trend: " + " \u00b7 ".join(bits) + (f" \u2192 {read}" if read else "")
+
+
+def _structure_word(a, b):
+    if a is None or b is None:
+        return None
+    if a >= 0 and b >= 0:
+        return "uptrend intact" if a < 8 else "uptrend, stretched above the 50d"
+    if a < 0 and b >= 0:
+        return "pullback inside an uptrend"
+    if a >= 0 and b < 0:
+        return "bounce inside a downtrend"
+    return "downtrend intact"
+
+
+def _cot_read(cot):
+    """One-line reading of the CFTC positioning."""
+    net, wow = cot.get("net_long") or 0, cot.get("wow")
+    side = "long" if net > 0 else "short"
+    if wow is None or net == 0:
+        return f"Funds are net {side}."
+    swing = abs(wow) / abs(net) * 100 if net else 0
+    if (net > 0) == (wow > 0):
+        pace = "adding" if swing >= 3 else "holding"
+        return f"Funds are {pace} to the {side} side ({swing:.0f}% of the position this week)."
+    pace = "trimming" if swing < 10 else "cutting"
+    return f"Funds are {pace} the {side} side ({swing:.0f}% of the position this week)."
+
+
+def _macro_lines(symbol, data, macro):
+    """Dollar, yields and the gold/silver ratio for the metals, each with
+    the direction that matters for the metal."""
+    lines = []
+    usd, tnx = macro.get("usd"), macro.get("us10y")
+    bits = []
+    if usd and usd.get("last") is not None:
+        bits.append(f"USD index {usd['last']:.1f} ({pct(usd.get('chg_1m'), 1)} 1m)")
+    if tnx and tnx.get("last") is not None:
+        d = tnx.get("delta_1m")
+        bp = f" ({d * 100:+.0f}bp 1m)" if d is not None else ""
+        bits.append(f"US 10y {tnx['last']:.2f}%{bp}")
+    gs = data.get("gold_silver")
+    if gs:
+        bits.append(f"gold/silver {gs:.0f}")
+    if bits:
+        lines.append("\U0001f310 Macro: " + " \u00b7 ".join(bits))
+    reads = []
+    if usd and usd.get("chg_1m") is not None:
+        if usd["chg_1m"] <= -1:
+            reads.append("a softer dollar is a tailwind")
+        elif usd["chg_1m"] >= 1:
+            reads.append("a firmer dollar is a headwind")
+    if tnx and tnx.get("delta_1m") is not None:
+        if tnx["delta_1m"] <= -0.15:
+            reads.append("falling yields lower the cost of holding metal")
+        elif tnx["delta_1m"] >= 0.15:
+            reads.append("rising yields raise the cost of holding metal")
+    if gs:
+        if gs >= 85:
+            reads.append("silver is cheap against gold by the ratio")
+        elif gs <= 60:
+            reads.append("silver has outrun gold by the ratio")
+    if reads:
+        lines.append("   " + "; ".join(reads).capitalize() + ".")
+    return lines
+
+
+def _cfd_summary(data):
+    """One sentence that puts range, trend and momentum together."""
+    rp, off = data.get("range_pos"), data.get("off_high_pct")
+    struct = _structure_word(data.get("vs_sma50"), data.get("vs_sma200"))
+    parts = [f"price {_trend_word(data.get('chg_1y'))} over 1y"]
+    if struct:
+        parts.append(struct)
+    if rp is not None:
+        if rp >= 90:
+            parts.append("trading at the top of its 1y range")
+        elif rp <= 10:
+            parts.append("trading at the bottom of its 1y range")
+        elif off is not None:
+            parts.append(f"{abs(off):.0f}% off the 1y high")
+    return " \u00b7 ".join(parts)
+
+
 def outlook_cfd(symbol, data):
     lines = [""]
-    lines.append(f"\U0001f4cb Executive summary: price {_trend_word(data.get('chg_1y'))} over 1y.")
+    lines.append(f"\U0001f4cb Executive summary: {_cfd_summary(data)}.")
     lines.append(f"\U0001f52e Outlook \u2014 short term {_trend_word(data.get('chg_1w'))}; "
                  f"medium term {_trend_word(data.get('chg_3m'))}.")
     risks = []
     if (data.get("vol_pct") or 0) > 35:
         risks.append(f"high volatility ({data['vol_pct']:.0f}% annualized)")
+    v1m, v1y = data.get("vol_pct_1m"), data.get("vol_pct")
+    if v1m is not None and v1y and v1m > v1y * 1.5:
+        risks.append(f"volatility expanding ({v1m:.0f}% last month vs {v1y:.0f}% 1y)")
     cot = data.get("cot") or {}
     if cot.get("net_long") and cot.get("wow"):
         if cot["net_long"] > 0 and cot["wow"] < 0:
@@ -377,13 +475,22 @@ def outlook_cfd(symbol, data):
     w, m = data.get("chg_1w") or 0, data.get("chg_3m") or 0
     if (w > 0.5) != (m > 0.5) and (w < -0.5) != (m < -0.5):
         risks.append("short vs medium trend conflict \u2014 chop risk")
+    a = data.get("vs_sma50")
+    if a is not None and a >= 8:
+        risks.append(f"stretched {a:+.0f}% above the 50d \u2014 mean-reversion risk")
+    macro = data.get("macro") or {}
+    usd = macro.get("usd") or {}
+    if (usd.get("chg_1m") or 0) >= 1 and (data.get("chg_1m") or 0) > 0:
+        risks.append("rallying into a firmer dollar")
     lines.append("\u26a0\ufe0f Risks: " + ("; ".join(risks) if risks
                  else "no elevated flags in this snapshot") + ".")
     spec = ""
     if cot.get("net_long") is not None:
         side = "net long" if cot["net_long"] > 0 else "net short"
         spec = f" \u00b7 specs {side}"
-    lines.append(f"\u2705 Conclusion: {_trend_word(data.get('chg_3m'))} medium-term tape{spec}.")
+    struct = _structure_word(data.get("vs_sma50"), data.get("vs_sma200"))
+    tape = f"{struct}, " if struct else ""
+    lines.append(f"\u2705 Conclusion: {tape}{_trend_word(data.get('chg_3m'))} medium-term tape{spec}.")
     lines.extend(_watchlist_lines("cfd", symbol))
     return lines
 
@@ -513,16 +620,32 @@ def fundamentals_report(kind, symbol, data, hub_mode, pro=True):
             lines.append(f"Market {e(symbol)} \u00b7 Data: {e(data.get('source', 'derived'))}")
             lines.append(f"Price: <b>{price(data['price'])}</b> \u00b7 "
                          f"1y range {price(data.get('low_1y'))} \u2013 {price(data.get('high_1y'))}")
+            rp = data.get("range_pos")
+            if rp is not None:
+                off = data.get("off_high_pct")
+                where = (f" \u00b7 {abs(off):.1f}% below the 1y high" if off is not None and off < -0.05
+                         else " \u00b7 at the 1y high" if off is not None else "")
+                lines.append(f"Range: {meter(rp)} {rp:.0f}% of 1y range{where}")
             lines.append(f"Move: 1w {pct(data.get('chg_1w'), 2)} \u00b7 1m {pct(data.get('chg_1m'), 2)} \u00b7 "
                          f"3m {pct(data.get('chg_3m'), 2)} \u00b7 1y {pct(data.get('chg_1y'), 2)}")
-            lines.append(f"Realized volatility (annualized): {data.get('vol_pct', 0):.0f}%")
+            tl = _trend_structure_line(data)
+            if tl:
+                lines.append(tl)
+            v1m = data.get("vol_pct_1m")
+            vol_note = (f" \u00b7 last month {v1m:.0f}%" if v1m is not None else "")
+            lines.append(f"Realized volatility (annualized): {data.get('vol_pct', 0):.0f}%{vol_note}")
             cot = data.get("cot")
-            if pro and cot:
+            macro = data.get("macro") or {}
+            if pro and (cot or macro):
                 lines.append("")
+            if pro and cot:
                 arrow = "\U0001f7e2" if (cot.get("net_long") or 0) > 0 else "\U0001f534"
                 wow = f" ({cot['wow']:+,} WoW)" if cot.get("wow") is not None else ""
                 lines.append(f"{arrow} Large speculators net "
                              f"{cot['net_long']:+,} contracts{wow} \u00b7 w/e {cot['date']} (CFTC)")
+                lines.append(f"   {_cot_read(cot)}")
+            if pro and macro:
+                lines.extend(_macro_lines(symbol, data, macro))
             if pro:
                 lines.extend(outlook_cfd(symbol, data))
         else:
