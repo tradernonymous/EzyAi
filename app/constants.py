@@ -504,5 +504,9 @@ MAX_PLAN_MONTHS = 24
 # itself with alerts.
 MAX_WATCHES = 10
 WATCH_DAILY_LIMIT = 30
-# Per-chat command budget (commands + button taps) per minute.
-RATE_LIMIT_PER_MINUTE = 20
+# Per-chat command budget (commands + button taps) per minute. Menu
+# navigation alone is tap-heavy -- the pair picker pages eight times and a
+# watch takes four taps -- so a real user setting up three watches can pass
+# twenty inside a minute. Forty still stops a script while leaving room for
+# a person working through the menus.
+RATE_LIMIT_PER_MINUTE = 40
