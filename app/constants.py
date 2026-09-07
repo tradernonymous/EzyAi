@@ -307,6 +307,18 @@ SPREAD_ATR_MAX = {"scalping": 0.35, "intraday": 0.20, "swing": 0.10}
 # north-star is that scalping needs the tightest possible live spread, which
 # only exists inside London/NY liquidity. Crypto is 24/7 and never gated.
 SCALP_SESSIONS = {
+    # Spot gold trades from the Sunday-evening open to the Friday-evening
+    # close with one hour's break a day, and its feed (Binance PAXG) never
+    # sleeps, so the window is the trading day itself. The spread is
+    # tightest in London/NY, which stays the preferred slot; outside it a
+    # scalp is still real, just paid for with a few cents more of spread.
+    "spot_metals": {
+        "windows": ((0, 21 * 60),),
+        "preferred": ((12 * 60, 16 * 60),),
+        "label": "gold's trading day (00:00\u201321:00 UTC, Mon\u2013Fri)",
+    },
+    # Yahoo-served metals, energy and GER40: intraday bars come from the
+    # futures/cash session, so scalping stays inside London/NY.
     "metals": {
         "windows": ((7 * 60, 16 * 60),),
         "preferred": ((12 * 60, 16 * 60),),
@@ -341,8 +353,8 @@ SCALP_CLASS_MAJORS = {"EURUSD", "GBPUSD", "USDJPY", "USDCHF",
 
 
 def scalp_class(pair):
-    """Session class for scalping-window gating: 'metals', 'index_us',
-    'fx_major', 'fx_other', 'crypto' or None.
+    """Session class for scalping-window gating: 'spot_metals', 'metals',
+    'index_us', 'fx_major', 'fx_other', 'crypto' or None.
 
     None means the instrument is never scalped, whatever the feed says --
     single stocks and unknown symbols. app/data/quality.py reads this as
@@ -353,7 +365,9 @@ def scalp_class(pair):
         return "crypto"
     if s in INDEX_US:
         return "index_us"
-    if s in CFD_UNIVERSE:  # metals, energy, GER40
+    if s in CFD_SPOT:  # gold off the round-the-clock token feed
+        return "spot_metals"
+    if s in CFD_UNIVERSE:  # silver, energy, GER40 off Yahoo futures/cash
         return "metals"
     if s in FX_UNIVERSE:
         return "fx_major" if s in SCALP_CLASS_MAJORS else "fx_other"

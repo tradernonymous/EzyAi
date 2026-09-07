@@ -107,7 +107,8 @@ def test_scalp_class_mapping():
     assert constants.scalp_class("EURUSD") == "fx_major"
     assert constants.scalp_class("GBPUSD") == "fx_major"
     assert constants.scalp_class("EURJPY") == "fx_other"
-    assert constants.scalp_class("XAUUSD") == "metals"
+    assert constants.scalp_class("XAUUSD") == "spot_metals"
+    assert constants.scalp_class("XAGUSD") == "metals"
     assert constants.scalp_class("WTI") == "metals"
     assert constants.scalp_class("US30") == "index_us"
     assert constants.scalp_class("NAS100") == "index_us"
@@ -138,8 +139,8 @@ def test_us_index_window_follows_the_new_york_cash_session():
     t1300 = datetime(2026, 9, 7, 13, 0, tzinfo=timezone.utc).timestamp()
     assert regime.scalp_session("US30", now=t1300)["in_window"] is False
     assert regime.scalp_session("US30", now=T18)["in_window"] is True
-    # metals shut at 16:00, so the two classes genuinely differ
-    assert regime.scalp_session("XAUUSD", now=T18)["in_window"] is False
+    # Yahoo-served metals shut at 16:00, so the two classes genuinely differ
+    assert regime.scalp_session("XAGUSD", now=T18)["in_window"] is False
 
 
 def test_scalp_session_inside_and_outside():
@@ -147,26 +148,39 @@ def test_scalp_session_inside_and_outside():
     assert win["in_window"] is True and win["preferred"] is True
     win18 = regime.scalp_session("EURUSD", now=T18)
     assert win18["in_window"] is True  # fx majors run to 21:00
-    assert regime.scalp_session("XAUUSD", now=T18)["in_window"] is False
+    assert regime.scalp_session("XAGUSD", now=T18)["in_window"] is False
     assert regime.scalp_session("EURJPY", now=T18)["in_window"] is False
+    # spot gold scalps all day, with London/NY still the preferred slot
+    gold18 = regime.scalp_session("XAUUSD", now=T18)
+    assert gold18["in_window"] is True and gold18["preferred"] is False
+    assert regime.scalp_session("XAUUSD", now=T9)["preferred"] is True
+    t2130 = datetime(2026, 9, 7, 21, 30, tzinfo=timezone.utc).timestamp()
+    assert regime.scalp_session("XAUUSD", now=t2130)["in_window"] is False
     assert regime.scalp_session("BTCUSD", now=T9) is None  # never gated
 
 
 def test_next_session_open_skips_weekend():
     # Sat 13:00 -> Monday 07:00 UTC, never "Sunday 07:00".
-    nxt = regime.next_session_open("XAUUSD", now=TSAT)
+    nxt = regime.next_session_open("XAGUSD", now=TSAT)
     assert datetime.fromtimestamp(nxt, tz=timezone.utc).strftime(
         "%Y-%m-%d %H:%M") == "2026-09-07 07:00"
-    # Mon 18:00 (metals shut at 16:00) -> tomorrow 07:00.
-    nxt2 = regime.next_session_open("XAUUSD", now=T18)
+    # Mon 18:00 (Yahoo metals shut at 16:00) -> tomorrow 07:00.
+    nxt2 = regime.next_session_open("XAGUSD", now=T18)
     assert datetime.fromtimestamp(nxt2, tz=timezone.utc).strftime(
         "%Y-%m-%d %H:%M") == "2026-09-08 07:00"
+    # spot gold after the 21:00 close -> tomorrow 00:00; Sat -> Monday 00:00
+    t2130 = datetime(2026, 9, 7, 21, 30, tzinfo=timezone.utc).timestamp()
+    assert datetime.fromtimestamp(regime.next_session_open("XAUUSD", now=t2130),
+                                  tz=timezone.utc).strftime("%Y-%m-%d %H:%M") == "2026-09-08 00:00"
+    assert datetime.fromtimestamp(regime.next_session_open("XAUUSD", now=TSAT),
+                                  tz=timezone.utc).strftime("%Y-%m-%d %H:%M") == "2026-09-07 00:00"
     assert regime.next_session_open("BTCUSD", now=T9) is None
 
 
 def test_block_kind_classification():
     assert regime.block_kind("EURUSD", "scalping", "5m", now=T18) == "closed"
-    assert regime.block_kind("XAUUSD", "scalping", "5m", now=T18) == "session"
+    assert regime.block_kind("XAGUSD", "scalping", "5m", now=T18) == "session"
+    assert regime.block_kind("XAUUSD", "scalping", "5m", now=T18) == "closed"
     assert regime.block_kind("EURUSD", "intraday", "15m", now=T9) == "stale"
     assert regime.block_kind("BTCUSD", "scalping", "5m", now=T18) == "stale"
 
@@ -466,10 +480,12 @@ def test_open_window_with_a_quiet_feed_is_not_reported_as_a_shut_market():
 
 
 def test_a_genuinely_shut_venue_still_names_the_next_session():
+    # 03:00 is outside silver's Yahoo window (gold's spot window now runs
+    # all day, so it no longer serves as the shut-venue example)
     t = datetime(2026, 9, 8, 3, 0, tzinfo=timezone.utc).timestamp()  # 03:00
     out = msg.quality_gate_text(
-        "XAUUSD", "scalping",
-        "quality gate: closed: XAUUSD 5m last bar 400m old > 20m tolerance",
+        "XAGUSD", "scalping",
+        "quality gate: closed: XAGUSD 5m last bar 400m old > 20m tolerance",
         now=t)
     assert "markets look closed" in out
     assert "Next session" in out
