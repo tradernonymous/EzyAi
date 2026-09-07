@@ -15,6 +15,12 @@ def evaluate(analysis):
     # tradeable idea, never alert on it.
     if abs(spec["market"] - spec["sl"]) <= 0 or abs(spec["tp1"] - spec["market"]) <= 0:
         return None
+    # A shut venue or a frozen feed means the price cannot be traded. Both
+    # default to safe values so hand-built analyses in tests still evaluate.
+    if analysis.get("stale"):
+        return None
+    if analysis.get("session", "open") == "closed":
+        return None
 
     gates = constants.SIGNAL_GATES.get(analysis.get("style", "intraday"),
                                          {"conf_gate": constants.CONFIDENCE_GATE})

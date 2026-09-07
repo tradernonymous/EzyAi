@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timezone
 
 from .. import constants
+from ..analysis import regime as rg
 from . import engine as signal_engine
 from .autopilot import AutoPilot
 
@@ -710,6 +711,13 @@ class Service:
             return True
         return now - self.last_check.get(key, 0) >= interval * min(2 ** n, 16)
 
+    def _venue_open(self, pair):
+        """False when this pair's venue cannot print a fresh bar right now."""
+        try:
+            return rg.venue_open_now(self.hub.classify(pair))
+        except Exception:  # unknown symbol or stub hub: let the fetch decide
+            return True
+
     async def tick(self, send):
         now = time.time()
         self._prune_counters()
@@ -736,6 +744,10 @@ class Service:
             if now - self.last_check.get(key, 0.0) < interval:
                 continue
             if not self._backoff_ok(key, now, interval):
+                continue
+            if not self._venue_open(watch["pair"]):
+                # Shut market: no new bar can exist, so skip the upstream
+                # fetch entirely instead of polling all weekend.
                 continue
             self.last_check[key] = now
             due.append(watch)

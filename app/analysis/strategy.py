@@ -193,10 +193,21 @@ def analyze(pair, style, mode, hub, interval=None, sentiment=None):
     else:
         reasons.append("Trend is neutral; signal quality is low")
 
+    try:
+        kind = hub.classify(pair)
+    except Exception:
+        kind = None
+    # Freshness is judged for every analysis, neutral included, so the
+    # caller can tell a live read from a shut venue or a frozen feed.
+    last_ts = candles[-1]["ts"]
+    age_s = rg.bar_age_s(last_ts)
+    stale = rg.is_stale(last_ts, base_tf)
+    session = rg.session_state(kind, last_ts) if kind else "open"
+
     spec = None
     confidence = 0.0
     confluence = {"pattern": 0, "sentiment": sentiment, "vol_ratio": None,
-                  "session": "open"}
+                  "session": session}
     if side != "neutral":
         spec = _spec(side, price, atr_v, sup_lv, res_lv, mode_profile)
         gates = constants.SIGNAL_GATES[style]
@@ -242,14 +253,9 @@ def analyze(pair, style, mode, hub, interval=None, sentiment=None):
         elif ratio is not None and (ratio >= rg.VOL_CHAOS_RATIO
                                     or ratio <= rg.VOL_DEAD_RATIO):
             reasons.append(f"Volatility x{ratio:.1f} vs recent median")
-        try:
-            kind = hub.classify(pair)
-        except Exception:
-            kind = None
-        state = rg.session_state(kind, candles[-1]["ts"]) if kind else "open"
-        confluence["session"] = state
+        state = session
         if scoring:
-            confidence = rg.apply_session(confidence, kind, candles[-1]["ts"], reasons)
+            confidence = rg.apply_session(confidence, kind, last_ts, reasons)
         elif state != "open" and base_tf != "1d":
             # daily bars print at 00:00 UTC; session labels are meaningless there
             label = {"closed": "Weekend market (thin/stale quotes)",
@@ -278,7 +284,11 @@ def analyze(pair, style, mode, hub, interval=None, sentiment=None):
         "mode": mode,
         "base_tf": base_tf,
         "direction_tf": direction_tf,
-        "ts": candles[-1]["ts"],
+        "ts": last_ts,
+        "kind": kind,
+        "bar_age_s": age_s,
+        "stale": stale,
+        "session": session,
         "price": price,
         "trend": {"direction": direction, "strength": strength,
                   "align": "bull" if bull_align else ("bear" if bear_align else "mixed"),

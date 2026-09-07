@@ -80,6 +80,20 @@ MODE_PROFILE = {
     },
 }
 
+# A candle series older than this is not tradeable: the venue is shut, or
+# the feed has frozen. Roughly three bars plus grace. Daily bars print at
+# 00:00 UTC, so their limit must clear a full day.
+MAX_BAR_AGE_S = {
+    "1m": 300,
+    "5m": 1200,
+    "15m": 3000,
+    "30m": 5700,
+    "1h": 11000,
+    "4h": 43200,
+    "1d": 180000,
+}
+DEFAULT_MAX_BAR_AGE_S = 3000
+
 CONFIDENCE_GATE = 62
 
 # Phase-3 confluence scoring switch. Backtest evidence (2026-09: patterns,

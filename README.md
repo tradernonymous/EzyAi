@@ -93,6 +93,25 @@ every result.
 `EZYAI_DEMO_DATA=true` enables a deterministic synthetic data fallback when a
 live feed fails (useful for offline demos/tests).
 
+### Trading hours and stale data
+
+Crypto trades continuously; the other markets do not, and Yahoo keeps
+returning the last printed bar after a venue shuts. Signals are therefore
+gated on freshness, which matters most for scalping (5m bars):
+
+- A watch fires only when the newest bar is recent for its timeframe
+  (`constants.MAX_BAR_AGE_S`, roughly three bars) **and** the venue is open.
+- Forex and CFDs follow the Sunday 17:00 to Friday 17:00 New York week, so
+  Sunday evening counts as open. Stocks follow the 09:30-16:00 New York cash
+  session, daylight saving included; pre- and post-market bars are not
+  fetched, so those hours count as shut.
+- Watches on a shut venue are skipped before any upstream request, so a
+  weekend costs no Yahoo calls, and they resume by themselves at the open.
+  No "market closed" message is sent.
+- `/analyze` still answers on a shut or stale market. It labels the reply
+  "Market closed" or "Stale feed" with the age of the last bar, rather than
+  presenting an untradeable price as live.
+
 ## Setup
 
 ```bash

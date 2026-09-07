@@ -32,6 +32,37 @@ def pct(v, digits=1):
     return f"{v:+.{digits}f}%"
 
 
+def _age_words(seconds):
+    seconds = max(0, int(seconds or 0))
+    if seconds < 90:
+        return "just now"
+    if seconds < 5400:
+        return f"{seconds // 60} min old"
+    if seconds < 172800:
+        return f"{seconds // 3600}h old"
+    return f"{seconds // 86400}d old"
+
+
+def data_state_line(a):
+    """A line naming a shut venue or an old bar, or "" when the read is live.
+
+    Signals are suppressed in those states; on-demand analysis still renders,
+    so it has to say plainly that the price is not tradeable right now.
+    """
+    stale, session = a.get("stale"), a.get("session", "open")
+    if not stale and session == "open":
+        return ""
+    age = _age_words(a.get("bar_age_s"))
+    if session == "closed":
+        return (f"\U0001f6d1 <b>Market closed</b> \u00b7 last bar {age} \u00b7 "
+                "reference only, alerts resume at the open.")
+    if stale:
+        return (f"\u26a0\ufe0f <b>Stale feed</b> \u00b7 last bar {age} \u00b7 "
+                "reference only, no alerts until it refreshes.")
+    label = "Outside the US cash session" if a.get("kind") == "stock" else "Thin session"
+    return f"\u26a0\ufe0f {label} \u00b7 last bar {age} \u00b7 spreads are wider."
+
+
 def analysis_report(a):
     e = escape
     lines = []
@@ -45,6 +76,9 @@ def analysis_report(a):
                  f"{SIDE_LABEL[a['side']]} idea")
     lines.append(f"{style_label} \u00b7 {mode_label} \u00b7 TF {a['base_tf']} (trend: {a['direction_tf']})")
     lines.append(f"Price: <b>{price(a['price'])}</b> \u00b7 Data: {a['data_mode']}")
+    freshness = data_state_line(a)
+    if freshness:
+        lines.append(freshness)
     bb = ind["bb"]
     bb_bar = position_bar(bb["lower"], bb["upper"], a["price"])
     if bb_bar:
