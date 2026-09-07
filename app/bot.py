@@ -51,7 +51,7 @@ class Bot:
     def __init__(self, token, hub, service, demo_ok=False, pay_config=None):
         self.hub = hub
         self.service = service
-        self.fund = Fundamentals()
+        self.fund = Fundamentals(hub=hub)
         self.demo_ok = demo_ok
         self.pay = dict(pay_config or {})
         self.site = site_entitlements.SiteClient(
@@ -696,7 +696,7 @@ class Bot:
             elif kind == constants.KIND_FOREX:
                 data = self.fund.forex(pair)
             elif kind == constants.KIND_CFD:
-                data = self.fund.cfd(sym, tag=pair)
+                data = self.fund.cfd(pair, tag=pair)
         except Exception:
             data = None
         text = msg.fundamentals_report(kind, pair, data, "live", pro=pro)

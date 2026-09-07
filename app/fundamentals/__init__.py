@@ -23,7 +23,11 @@ class Fundamentals:
         "Accept": "application/json",
     }
 
-    def __init__(self, session=None, timeout=10):
+    def __init__(self, session=None, timeout=10, hub=None):
+        # hub: the DataHub, so derived series come from the same venue the
+        # signals use (spot gold via Binance, futures fallback) instead of
+        # a bare Yahoo lookup that has no spot metal ticker at all.
+        self.hub = hub
         self.session = session or requests.Session()
         headers = dict(self.HEADERS)
         # SEC's fair-access policy requires a declared client with a contact
@@ -270,23 +274,45 @@ class Fundamentals:
         var = sum((x - mean) ** 2 for x in log_rets) / max(len(log_rets) - 1, 1)
         return math.sqrt(var * period) * 100.0
 
-    def _derived(self, symbol, kind):
+    def _daily(self, symbol, kind, limit=300):
+        """Daily candles for a pair: through the hub when one is attached
+        (venue routing, fallbacks, cache), else straight from Yahoo."""
+        if self.hub is not None:
+            return self.hub.fetch_klines(symbol, "1d", limit)
         from ..data.provider import YahooProvider
-        yahoo = YahooProvider(kind=kind)
-        candles = yahoo.fetch_klines(symbol, "1d", 300)
+        return YahooProvider(kind=kind).fetch_klines(symbol, "1d", limit)
+
+    @staticmethod
+    def _sma(closes, n):
+        return sum(closes[-n:]) / n if len(closes) >= n else None
+
+    def _derived(self, symbol, kind):
+        candles = self._daily(symbol, kind)
         if not candles:
             return None
         closes = [c["close"] for c in candles]
+        px = closes[-1]
+        hi, lo = max(closes[-252:]), min(closes[-252:])
+        venue = candles[-1].get("source")
+        source = {"binance": "spot via Binance, daily bars",
+                  "yahoo": "Yahoo daily bars"}.get(venue, "derived from daily candles")
+        sma50, sma200 = self._sma(closes, 50), self._sma(closes, 200)
         return {
-            "price": closes[-1],
-            "high_1y": max(closes[-252:]),
-            "low_1y": min(closes[-252:]),
+            "price": px,
+            "high_1y": hi,
+            "low_1y": lo,
+            # where today's close sits inside the 1y range, 0 = at the low
+            "range_pos": ((px - lo) / (hi - lo) * 100) if hi > lo else None,
+            "off_high_pct": (px / hi - 1) * 100 if hi else None,
+            "vs_sma50": (px / sma50 - 1) * 100 if sma50 else None,
+            "vs_sma200": (px / sma200 - 1) * 100 if sma200 else None,
             "chg_1w": (closes[-1] / closes[-6] - 1) * 100 if len(closes) >= 6 else None,
             "chg_1m": (closes[-1] / closes[-22] - 1) * 100 if len(closes) >= 22 else None,
             "chg_3m": (closes[-1] / closes[-66] - 1) * 100 if len(closes) >= 66 else None,
             "chg_1y": (closes[-1] / closes[-252] - 1) * 100 if len(closes) >= 250 else None,
             "vol_pct": self._realized_vol(closes),
-            "source": "derived from daily candles",
+            "vol_pct_1m": self._realized_vol(closes[-23:], period=252) if len(closes) >= 23 else None,
+            "source": source,
         }
 
     def forex(self, symbol):
@@ -359,6 +385,31 @@ class Fundamentals:
 
         return self._cached("cot:" + pair.upper(), 86400, fetch)
 
+    # Macro drivers for the metals: the dollar and real-rate proxy move
+    # gold more than anything in gold's own tape. Yahoo serves all three.
+    MACRO_TICKERS = {"usd": "DX-Y.NYB", "us10y": "^TNX", "silver": "SI=F"}
+
+    def macro(self):
+        """Dollar index, US 10y yield and silver, each with a 1m change.
+        Cached for an hour; any leg that fails is simply absent."""
+        def fetch():
+            from ..data.provider import YahooProvider
+            yahoo = YahooProvider(kind=constants.KIND_CFD)
+            out = {}
+            for key, tick in self.MACRO_TICKERS.items():
+                try:
+                    closes = [c["close"] for c in yahoo.fetch_klines(tick, "1d", 60)]
+                except Exception:
+                    continue
+                if len(closes) < 2:
+                    continue
+                back = closes[-22] if len(closes) >= 22 else closes[0]
+                out[key] = {"last": closes[-1],
+                            "chg_1m": (closes[-1] / back - 1) * 100 if back else None,
+                            "delta_1m": closes[-1] - back}
+            return out or None
+        return self._cached("macro", 3600, fetch) or {}
+
     def cfd(self, symbol, tag=None):
         d = self._derived(symbol, constants.KIND_CFD)
         if d and tag:
@@ -366,6 +417,15 @@ class Fundamentals:
                 d["cot"] = self.cot(tag)
             except Exception:
                 pass
+            if tag.upper() in ("XAUUSD", "XAGUSD"):
+                try:
+                    m = self.macro()
+                    if m:
+                        d["macro"] = m
+                        if tag.upper() == "XAUUSD" and m.get("silver", {}).get("last"):
+                            d["gold_silver"] = d["price"] / m["silver"]["last"]
+                except Exception:
+                    pass
         return d
 
     def news(self, query, limit=3):
