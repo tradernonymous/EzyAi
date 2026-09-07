@@ -414,3 +414,15 @@ def test_autopilots_survive_a_restart_and_old_rows_load(tmp_path):
         {"chat_id": 24, "style": "swing", "mode": "normal"}]})
     assert list(again.autopilots) == ["24:swing"]
     assert again.forget_chat(24) is True and again.autopilots == {}
+
+
+def test_autopilot_scope_is_persisted(tmp_path):
+    svc = _svc(tmp_path)
+    svc.start_autopilot(31, "swing", "normal", exclude=["crypto"])
+    again = _svc(tmp_path)
+    pilot = again.list_autopilots(31)[0]
+    assert pilot.exclude == {"crypto"}
+    assert again.autopilot_view()[0]["exclude"] == ["crypto"]
+    # restarting the style with a new scope rebuilds the scan order
+    again.start_autopilot(31, "swing", "safe", exclude=[])
+    assert again.list_autopilots(31)[0].exclude == set()

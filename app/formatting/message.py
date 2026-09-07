@@ -36,110 +36,145 @@ def pct(v, digits=1):
 
 def analysis_report(a):
     e = escape
-    lines = []
     trend = a["trend"]
     spec = a["spec"]
     ind = a["ind"]
     style_label = constants.STYLE_PROFILE[a["style"]]["label"]
     mode_label = constants.MODE_PROFILE[a["mode"]]["label"]
 
-    lines.append(f"\U0001f4c8 <b>{e(a['pair'])}</b> \u00b7 {BADGE[a['side']]} "
-                 f"{SIDE_LABEL[a['side']]} idea")
-    lines.append(f"{style_label} \u00b7 {mode_label} \u00b7 TF {a['base_tf']} (trend: {a['direction_tf']})")
-    lines.append(f"Price: <b>{price(a['price'])}</b> \u00b7 Data: {a['data_mode']}")
+    lines = [f"\U0001f4c8 <b>{e(a['pair'])}</b> \u00b7 {BADGE[a['side']]} "
+             f"<b>{SIDE_LABEL[a['side']]}</b> idea",
+             f"{style_label} \u00b7 {mode_label} risk \u00b7 {a['base_tf']} chart, "
+             f"trend from {a['direction_tf']}",
+             f"Price <b>{price(a['price'])}</b> \u00b7 Data {a['data_mode']}",
+             ""]
+
+    adx_text = f"ADX {trend['adx']:.0f}" if trend["adx"] is not None else "ADX \u2014"
+    lines.append("<b>Trend</b>")
+    lines.append(f"{_arrow(trend['direction'])} {e(trend['direction'].upper())} "
+                 f"({trend['strength']}) \u00b7 EMA align {trend['align']} \u00b7 {adx_text}")
+    dash = "\u2014"
+    rsi = ind["rsi"] if ind["rsi"] is not None else dash
+    macd_h = ind["macd_hist"] if ind["macd_hist"] is not None else dash
+    lines.append(f"RSI {rsi} \u00b7 MACD hist {macd_h} \u00b7 ATR {price(ind['atr'])}")
     bb = ind["bb"]
     bb_bar = position_bar(bb["lower"], bb["upper"], a["price"])
     if bb_bar:
-        lines.append(f"Bollinger position: {bb_bar} [{price(bb['lower'])}, {price(bb['upper'])}]")
-    lines.append("")
-    adx_text = f"ADX {trend['adx']:.0f}" if trend["adx"] is not None else "ADX -"
-    lines.append(f"<b>Trend</b>: {_arrow(trend['direction'])} {e(trend['direction'].upper())} ({trend['strength']}) \u00b7 "
-                 f"EMA align {trend['align']} \u00b7 {adx_text}")
-    lines.append(f"RSI {ind['rsi'] if ind['rsi'] is not None else '-'} \u00b7 "
-                 f"MACD hist {ind['macd_hist'] if ind['macd_hist'] is not None else '-'} \u00b7 "
-                 f"ATR {price(ind['atr'])}")
+        lines.append(f"Bollinger {bb_bar} {price(bb['lower'])} to {price(bb['upper'])}")
     if a["levels"]["support"] or a["levels"]["resistance"]:
-        sup = " / ".join(price(s) for s in a["levels"]["support"]) or "-"
-        res = " / ".join(price(r) for r in a["levels"]["resistance"]) or "-"
-        lines.append(f"Support: {sup}  \u00b7  Resistance: {res}")
+        sup = " \u00b7 ".join(price(x) for x in a["levels"]["support"]) or "\u2014"
+        res = " \u00b7 ".join(price(x) for x in a["levels"]["resistance"]) or "\u2014"
+        lines.append(f"Support {sup}")
+        lines.append(f"Resistance {res}")
     sp = a.get("spread")
     if sp and sp.get("atr_ratio") is not None:
-        est = " est." if sp.get("estimated") else ""
-        lines.append(f"Spread{est}: {price(sp['latest'])} "
-                     f"({sp['atr_ratio']:.2f} ATR)")
+        est = " (estimate)" if sp.get("estimated") else ""
+        lines.append(f"Spread{est} {price(sp['latest'])} \u00b7 {sp['atr_ratio']:.2f} ATR")
     lines.append("")
 
     if spec:
-        lines.append(f"<b>Signal</b>: {BADGE[a['side']]} {SIDE_LABEL[a['side']]}")
-        lines.append(f"Entry zone: <b>{price(spec['zone_low'])}</b> \u2013 <b>{price(spec['zone_high'])}</b> "
-                     f"(market {price(spec['market'])}, limit {price(spec['limit'])})")
-        lines.append(f"Stop loss : <b>{price(spec['sl'])}</b>")
-        lines.append(f"Take profit 1: <b>{price(spec['tp1'])}</b> \u00b7 Take profit 2: <b>{price(spec['tp2'])}</b>")
-        lines.append(f"Risk/reward {spec['rr']:.1f} \u00b7 Risk/trade {spec['risk_pct']:.1f}% of capital")
-        lines.append(f"Setup score: <b>{a['confidence']:.0f}/100</b> {meter(a['confidence'])} "
-                     "(aligned indicators, not a win probability)")
+        lines.append(f"<b>Signal</b> \u00b7 {BADGE[a['side']]} {SIDE_LABEL[a['side']]}")
+        lines.extend(_levels_block(spec["zone_low"], spec["zone_high"],
+                                   spec["sl"], spec["tp1"], spec["tp2"]))
+        lines.append(f"Market {price(spec['market'])} \u00b7 Limit {price(spec['limit'])}")
+        lines.append(f"Risk {spec['risk_pct']:.1f}% of capital \u00b7 Reward {spec['rr']:.1f}R")
+        lines.append(f"Setup score <b>{a['confidence']:.0f}</b>/100 {meter(a['confidence'])} "
+                     "\u00b7 aligned indicators, not a win probability")
     else:
-        lines.append(f"<b>Signal</b>: {BADGE[a['side']]} No trade setup \u2014 trend {trend['direction']}, "
-                     f"setup score {a['confidence']:.0f}/100 {meter(a['confidence'])}")
-    lines.append("")
+        lines.append(f"<b>Signal</b> \u00b7 {BADGE[a['side']]} no trade setup")
+        lines.append(f"Trend {trend['direction']} \u00b7 setup score "
+                     f"<b>{a['confidence']:.0f}</b>/100 {meter(a['confidence'])}")
 
     if a["reasons"]:
+        lines.append("")
         lines.append("<b>Why</b>")
-        for r in a["reasons"]:
-            lines.append(f"\u2022 {e(r)}")
-    lines.append("")
+        lines.extend(f"\u2022 {e(r)}" for r in a["reasons"])
 
     if a["exit_notes"]:
+        lines.append("")
         lines.append("<b>Exit rules</b>")
-        for note in a["exit_notes"]:
-            lines.append(f"\u2022 {note}")
-        lines.append(f"\u2022 Position sizing: size = (capital \u00d7 {spec['risk_pct']:.1f}%) / (entry \u2212 stop)")
-        lines.append(f"\u2022 Horizon: {a['hold_horizon']}")
+        lines.extend(f"\u2022 {note}" for note in a["exit_notes"])
+        lines.append(f"\u2022 Position size = (capital \u00d7 {spec['risk_pct']:.1f}%) "
+                     "\u00f7 (entry \u2212 stop)")
+        lines.append(f"\u2022 Horizon {a['hold_horizon']}")
+
     lines.append("")
     # 3C: /analyze is informational so it runs on delayed feeds too -- but
     # the quality note is printed from the same copy the buttons use, so it
     # can never drift from what the commands enforce.
     if a.get("quality_note"):
         lines.append(a["quality_note"])
-    lines.append("\U000026a0\ufe0f Educational confluence only. Not financial advice. Demo data can be used "
-                 "when live feeds fail \u2014 verify prices with your broker before acting.")
+    lines.append("<i>Educational confluence only, not financial advice. Demo data "
+                 "can stand in when live feeds fail. Verify prices with your "
+                 "broker before acting.</i>")
     return "\n".join(lines)
+
+
+def _feed_lines(sig):
+    """Provenance lines for a live message. Synthetic/demo data is flagged
+    loudly so a signal can never look like real data; a delayed mid feed
+    says so and names the spread it assumed."""
+    e = escape
+    src = sig.get("data_source")
+    if src == "synthetic" or sig.get("data_mode") == "demo":
+        return ["\U0001f6a8 <b>DEMO DATA</b> \u2014 prices may be simulated. "
+                "Verify before acting."]
+    if src == "yahoo":
+        sp = sig.get("spread_estimate")
+        if sp:
+            return [f"Feed: Yahoo delayed \u00b7 spread assumed {sp:.0f} bps "
+                    "\u00b7 verify with your broker"]
+        return ["Feed: Yahoo delayed \u00b7 verify with your broker"]
+    if src == "binance":
+        return ["Feed: Binance, live"]
+    if src == "ccxt":
+        return ["Feed: exchange, live"]
+    if src:
+        return [f"Feed: {e(str(src))}"]
+    return []
+
+
+def _levels_block(entry_low, entry_high, sl, tp1, tp2):
+    """Aligned entry / stop / target rows. Telegram renders <code> in a
+    monospace face, so the figures line up as a column."""
+    zone = f"{price(entry_low)} \u2013 {price(entry_high)}"
+    return [f"<code>Entry     {zone}</code>",
+            f"<code>Stop      {price(sl)}</code>",
+            f"<code>Target 1  {price(tp1)}</code>",
+            f"<code>Target 2  {price(tp2)}</code>"]
+
+
+def _sr_lines(support, resistance):
+    sup = " \u00b7 ".join(price(x) for x in (support or [])) or "\u2014"
+    res = " \u00b7 ".join(price(x) for x in (resistance or [])) or "\u2014"
+    return ["<b>Levels</b>", f"Support {sup}", f"Resistance {res}"]
 
 
 def signal_message(sig, source="watch"):
     e = escape
     header = "\U0001f514 <b>LIVE TRADE SIGNAL</b>" if source == "watch" else \
         "\U0001f680 <b>AUTO SIGNAL</b>"
-    lines = [f"{header} \u2014 {e(sig['pair'])}"]
-    lines.append(f"{BADGE[sig['side']]} <b>{SIDE_LABEL[sig['side']]}</b> \u00b7 "
-                 f"{constants.STYLE_PROFILE[sig['style']]['label']} \u00b7 "
-                 f"{constants.MODE_PROFILE[sig['mode']]['label']} \u00b7 TF {sig['tf']}")
-    # 3A provenance stamp on every live message; synthetic/demo data is
-    # flagged loudly so a signal can never look like real data.
-    if sig.get("data_source") == "synthetic" or sig.get("data_mode") == "demo":
-        lines.append("\U0001f6a8 <b>DEMO DATA</b> \u2014 prices may be simulated. "
-                     "Verify before acting.")
-    elif sig.get("data_source") == "yahoo":
-        # Provenance: a delayed mid feed with no bid/ask, so the spread that
-        # widened the stop is an estimate, not a quote. Say so.
-        sp = sig.get("spread_estimate")
-        if sp:
-            lines.append(f"Feed: Yahoo delayed \u00b7 spread assumed "
-                         f"{sp:.0f} bps \u00b7 verify with your broker")
-        else:
-            lines.append("Feed: Yahoo delayed \u00b7 verify with your broker")
-    elif sig.get("data_source") not in (None, "binance", "ccxt"):
-        lines.append(f"Data feed: {e(str(sig['data_source']))}")
-    lines.append(f"Entry zone: <b>{price(sig['entry_zone'][0])}</b> \u2013 <b>{price(sig['entry_zone'][1])}</b>")
-    lines.append(f"Stop loss : <b>{price(sig['sl'])}</b> \u00b7 RR target {sig['rr']:.1f}")
-    lines.append(f"TP1: <b>{price(sig['tp1'])}</b> \u00b7 TP2: <b>{price(sig['tp2'])}</b> \u00b7 "
-                 f"Risk {sig['risk_pct']:.1f}% \u00b7 Setup score {sig['confidence']:.0f}/100 {meter(sig['confidence'])}")
-    sup = " / ".join(price(s) for s in (sig.get("support") or [])) or "-"
-    res = " / ".join(price(r) for r in (sig.get("resistance") or [])) or "-"
-    lines.append(f"Levels \u2014 support: {sup} \u00b7 resistance: {res}")
-    if sig["reasons"]:
-        lines.append("Why: " + "; ".join(e(r) for r in sig["reasons"][:3]))
-    lines.append("\U000026a0\ufe0f Not financial advice.")
+    style = constants.STYLE_PROFILE[sig["style"]]["label"]
+    mode = constants.MODE_PROFILE[sig["mode"]]["label"]
+    lines = [header,
+             f"<b>{e(sig['pair'])}</b> \u00b7 {BADGE[sig['side']]} <b>{SIDE_LABEL[sig['side']]}</b>",
+             "",
+             f"{style} \u00b7 {mode} risk \u00b7 {sig['tf']} chart"]
+    lines.extend(_feed_lines(sig))
+    lines.append("")
+    lines.extend(_levels_block(sig["entry_zone"][0], sig["entry_zone"][1],
+                               sig["sl"], sig["tp1"], sig["tp2"]))
+    lines.append("")
+    lines.append(f"Risk {sig['risk_pct']:.1f}% of capital \u00b7 Reward {sig['rr']:.1f}R")
+    lines.append(f"Setup score <b>{sig['confidence']:.0f}</b>/100 {meter(sig['confidence'])}")
+    lines.append("")
+    lines.extend(_sr_lines(sig.get("support"), sig.get("resistance")))
+    if sig.get("reasons"):
+        lines.append("")
+        lines.append("<b>Why</b>")
+        lines.extend(f"\u2022 {e(r)}" for r in sig["reasons"][:3])
+    lines.append("")
+    lines.append("<i>Not financial advice. Verify prices with your broker.</i>")
     return "\n".join(lines)
 
 
@@ -223,14 +258,17 @@ def _countdown(secs):
 def quote_report(pair, tick):
     e = escape
     bar = position_bar(tick.get("low"), tick.get("high"), tick.get("price"))
-    lines = [
-        f"\U0001f4b2 <b>{e(pair)}</b> \u2014 <b>{price(tick['price'])}</b>",
-        f"24h change: {tick['change_pct']:+.2f}% \u00b7 High {price(tick['high'])} \u00b7 Low {price(tick['low'])}",
-    ]
+    lines = [f"\U0001f4b2 <b>{e(pair)}</b>",
+             f"<b>{price(tick['price'])}</b> \u00b7 {tick['change_pct']:+.2f}% over 24h",
+             ""]
     if bar:
         lines.append(f"Day range: {price(tick['low'])} {bar} {price(tick['high'])}")
-    lines.append(f"Volume: {tick['volume']:,.0f} ({tick['quote']}) \u00b7 Data: {tick.get('mode', 'live')}")
-    lines.append("\u26a0\ufe0f Indicative price, not financial advice.")
+    else:
+        lines.append(f"High {price(tick['high'])} \u00b7 Low {price(tick['low'])}")
+    lines.append(f"Volume {tick['volume']:,.0f} {e(str(tick['quote']))} \u00b7 "
+                 f"Data {tick.get('mode', 'live')}")
+    lines.append("")
+    lines.append("<i>Indicative price, not financial advice.</i>")
     return "\n".join(lines)
 
 
@@ -936,12 +974,14 @@ def verify_feed_report(p):
 
 def watch_list(rows):
     if not rows:
-        return ("No active watches yet \u2014 add your first alert with "
-                "/watch PAIR STYLE MODE")
-    lines = ["\U0001f440 <b>Active watch list</b>"]
+        return ("\U0001f440 <b>Watch list</b>\n\nNothing here yet. Add your first "
+                "alert with the button below or /watch PAIR STYLE MODE.")
+    lines = ["\U0001f440 <b>Watch list</b>", ""]
     for w in rows:
         state = "\u2705 alerted" if w["last_signal_ts"] else "\u23f3 listening"
-        lines.append(f"\u2022 <b>{w['pair']}</b> \u00b7 {w['style']}/{w['mode']} \u00b7 {state}")
+        lines.append(f"<b>{w['pair']}</b> \u00b7 {w['style']} \u00b7 {w['mode']} \u00b7 {state}")
+    lines.append("")
+    lines.append("Tap a row to remove it.")
     return "\n".join(lines)
 
 
@@ -1113,39 +1153,42 @@ def dashboard_view(watches, pilots, data_mode):
         pilots = []
     elif not isinstance(pilots, (list, tuple)):
         pilots = [pilots]
-    lines = ["\U0001f4cb <b>EzyAi dashboard</b>"]
+    lines = ["\U0001f4cb <b>EzyAi dashboard</b>", ""]
+    lines.append(f"\U0001f440 <b>Watching</b> \u00b7 {len(watches)}")
     if watches:
-        parts = []
         for w in watches[:4]:
             dot = "\U0001f7e2" if w.get("last_signal_ts") else "\U0001f7e1"
-            parts.append(f"{dot} <b>{w['pair']}</b> ({w['style']}/{w['mode']})")
-        extra = f" +{len(watches) - 4} more" if len(watches) > 4 else ""
-        lines.append(f"\U0001f440 Watching ({len(watches)}): " + ", ".join(parts) + extra)
+            lines.append(f"{dot} <b>{w['pair']}</b> \u00b7 {w['style']} \u00b7 {w['mode']}")
+        if len(watches) > 4:
+            lines.append(f"and {len(watches) - 4} more")
     else:
-        lines.append("\U0001f440 Watching (0): tap Watchlist to add your first alert.")
-    if pilots:
-        running = ", ".join(f"{p.style}/{p.mode}" for p in pilots)
-        lines.append(f"\U0001f916 Autopilot: <b>ON</b> \u00b7 {running}")
-    else:
-        lines.append("\U0001f916 Autopilot: off")
-    lines.append(f"Feed: {data_mode}")
-    lines.append("Send /start anytime for the shortcut menu.")
+        lines.append("Tap Watchlist to add your first alert.")
+    lines.append("")
+    lines.append(f"\U0001f916 <b>Autopilot</b> \u00b7 {'ON' if pilots else 'off'}")
+    for p in pilots:
+        scope = scope_label(getattr(p, "exclude", None))
+        tail = f" \u00b7 {scope}" if scope else ""
+        lines.append(f"\u2022 {p.style} \u00b7 {p.mode}{tail}")
+    lines.append("")
+    lines.append(f"Feed {data_mode} \u00b7 /start for the menu")
     return "\n".join(lines)
 
 
 def confirm_watch_text(pair, style, mode, check_s, rr, risk_pct):
     return (
-        f"\U0001f514 <b>Confirm watch</b>\n<b>{pair}</b> \u00b7 {style}/{mode}\n"
-        f"Checks every {check_s}s \u00b7 target RR {rr} \u00b7 risk {risk_pct:.1f}%/trade.\n"
-        "You will get a signal the moment a setup passes your risk rules."
+        f"\U0001f514 <b>Confirm watch</b>\n"
+        f"<b>{pair}</b> \u00b7 {style}/{mode}\n\n"
+        f"Checks every {check_s}s \u00b7 target {rr}R \u00b7 risk {risk_pct:.1f}% per trade\n\n"
+        "You get a signal the moment a setup passes your risk rules."
     )
 
 
-def confirm_auto_text(style, mode, daily_limit):
+def confirm_auto_text(style, mode, daily_limit, scope=None):
+    scope_line = f"\nScans {scope}" if scope else ""
     return (
-        f"\U0001f916 <b>Confirm autopilot</b>\n{style}/{mode} \u00b7 random pairs \u00b7 "
-        f"up to {daily_limit} signals/day.\n"
-        "You can stop it anytime from the dashboard."
+        f"\U0001f916 <b>Confirm autopilot</b>\n"
+        f"{style}/{mode} \u00b7 up to {daily_limit} signals a day{scope_line}\n\n"
+        "Stop it any time from the Autopilot button."
     )
 
 
@@ -1155,22 +1198,39 @@ def watch_cap_text(limit):
 
 
 def watch_added_text(pair, style, mode):
-    return (f"\u2705 <b>Watch live:</b> {pair} \u00b7 {style}/{mode}\n"
-            "You will get a signal the moment a setup passes your risk rules.")
+    return (f"\u2705 <b>Watch live</b>\n<b>{pair}</b> \u00b7 {style}/{mode}\n\n"
+            "You get a signal the moment a setup passes your risk rules.")
 
 
-def auto_started_text(style, mode):
-    return (f"\u2705 Autopilot live: {style}/{mode}\n"
-            "Scanning random pairs for you. Sit back.")
+def auto_started_text(style, mode, scope=None):
+    scope_line = f"\nScans {scope}" if scope else ""
+    return (f"\u2705 <b>Autopilot live</b>\n{style}/{mode}{scope_line}\n\n"
+            "Scanning the market for you. Sit back.")
 
 
 def autopilot_status_text(pilots):
     """Status card for the Autopilot button when scanners are running."""
-    lines = ["\U0001f916 Autopilot is <b>ON</b>"]
+    lines = ["\U0001f916 <b>Autopilot</b> \u00b7 ON", ""]
     for p in pilots:
-        lines.append(f"\u2022 {p.style}/{p.mode}")
-    lines.append("Each style scans random pairs within its own daily limit.")
+        scope = scope_label(getattr(p, "exclude", None))
+        tail = f" \u00b7 {scope}" if scope else ""
+        lines.append(f"\u2022 {p.style} \u00b7 {p.mode}{tail}")
+    lines.append("")
+    lines.append("Each style scans within its own daily limit.")
     return "\n".join(lines)
+
+
+def scope_label(exclude):
+    """Human label for an autopilot's asset-class scope, or None when it
+    scans everything."""
+    ex = sorted(set(exclude or ()))
+    if not ex:
+        return None
+    names = {k: v for k, v in constants.ASSET_CLASSES}
+    kept = [v for k, v in constants.ASSET_CLASSES if k not in ex]
+    if len(kept) <= 2:
+        return " and ".join(kept) + " only"
+    return "without " + " or ".join(names[k] for k in ex if k in names)
 
 
 def auto_universe_note(style, universe_size):
@@ -1206,7 +1266,7 @@ def help_text():
         "    MODE:  safe | normal | aggressive\n"
         "/watches \u2014 list your active watches\n"
         "/unwatch PAIR [STYLE] \u2014 stop alerts for a pair (one style, or all)\n"
-        "/autopilot STYLE MODE \u2014 random-pair auto signals\n"
+        "/autopilot STYLE MODE [-crypto -stocks ...] \u2014 auto signals across the market\n"
         "/stopautopilot [STYLE] \u2014 stop random signals (one style, or all)\n\n"
         "\U0001f464 <b>Account</b>\n"
         "/plans \u2014 trial and PRO plans\n"

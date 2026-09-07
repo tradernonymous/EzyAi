@@ -541,7 +541,8 @@ class Service:
             try:
                 key = self._autopilot_key(a["chat_id"], a["style"])
                 autopilots[key] = AutoPilot(
-                    self.hub, a["chat_id"], a["style"], a["mode"])
+                    self.hub, a["chat_id"], a["style"], a["mode"],
+                    exclude=a.get("exclude") or ())
             except (KeyError, TypeError) as exc:
                 logger.warning("skipping malformed autopilot row %r: %s", a, exc)
         for k, v in (data.get("users") or {}).items():
@@ -581,7 +582,8 @@ class Service:
             "saved_at": time.time(),
             "watches": list(self.watches.values()),
             "autopilots": [
-                {"chat_id": a.chat_id, "style": a.style, "mode": a.mode}
+                {"chat_id": a.chat_id, "style": a.style, "mode": a.mode,
+                 "exclude": sorted(a.exclude)}
                 for a in self.autopilots.values()
             ],
             "daily": self.daily_counters,
@@ -720,17 +722,18 @@ class Service:
         # scanner before it.
         return f"{chat_id}:{style}"
 
-    def start_autopilot(self, chat_id, style, mode):
-        """Start a scanner for this style, or change the mode of the one
-        already running (its scan cursor and recent list are kept)."""
+    def start_autopilot(self, chat_id, style, mode, exclude=None):
+        """Start a scanner for this style, or change the mode and scope of
+        the one already running (its recent list is kept)."""
         key = self._autopilot_key(chat_id, style)
         with self._lock:
             pilot = self.autopilots.get(key)
             if pilot is not None:
                 pilot.mode = mode
+                pilot.set_scope(exclude)
             else:
                 pilot = self.autopilots[key] = AutoPilot(
-                    self.hub, chat_id, style, mode)
+                    self.hub, chat_id, style, mode, exclude=exclude)
             self._save()
             return pilot
 
@@ -1002,5 +1005,6 @@ class Service:
 
     def autopilot_view(self):
         with self._lock:
-            return [{"chat_id": a.chat_id, "style": a.style, "mode": a.mode}
+            return [{"chat_id": a.chat_id, "style": a.style, "mode": a.mode,
+                     "exclude": sorted(a.exclude)}
                     for a in self.autopilots.values()]

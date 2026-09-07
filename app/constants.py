@@ -235,6 +235,29 @@ ALL_UNIVERSE = (
     + STOCK_UNIVERSE
 )
 
+# Asset classes a user can leave out of an autopilot scan, in the order the
+# toggle buttons show them. Keys are stored on the autopilot row.
+ASSET_CLASSES = (
+    ("metals", "Metals & CFDs"),
+    ("forex", "Forex"),
+    ("crypto", "Crypto"),
+    ("stocks", "Stocks"),
+)
+
+
+def asset_class(pair):
+    """Which ASSET_CLASSES key a universe pair belongs to, or None."""
+    s = pair.upper()
+    if s in CFD_UNIVERSE:
+        return "metals"
+    if s in FX_UNIVERSE:
+        return "forex"
+    if s in CRYPTO_UNIVERSE or s.endswith(("USDT", "USDC")):
+        return "crypto"
+    if s in STOCK_UNIVERSE:
+        return "stocks"
+    return None
+
 # Phase-2 ranked scanner: pairs analyzed per autopilot run, round-robined
 # across ALL_UNIVERSE with a seeded per-chat shuffle so busy rows spread
 # load. Budgeted against the Yahoo rate (~12 live calls/min): three pairs at

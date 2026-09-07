@@ -57,16 +57,16 @@ def test_autopilot_button_flow_starts_a_scanner(tmp_path):
     bot, svc = _bot(tmp_path)
     ctx = SimpleNamespace(user_data={}, bot=None)
     chat = _Chat(77)
-    assert "step 1/2" in _tap(bot, ctx, chat, "ezy:menu:auto")
+    assert "step 1/3" in _tap(bot, ctx, chat, "ezy:menu:auto")
     text = _tap(bot, ctx, chat, "ezy:style:auto:swing")
-    assert "step 2/2" in text and "start over" not in text
+    assert "step 2/3" in text and "start over" not in text
     assert "Confirm autopilot" in _tap(bot, ctx, chat, "ezy:mode:auto:normal")
     assert "Autopilot live" in _tap(bot, ctx, chat, "ezy:auto_go")
     assert [(p.style, p.mode) for p in svc.list_autopilots(77)] == [("swing", "normal")]
     # the button now shows the running scanner; Add style re-enters step 1
-    assert "swing/normal" in _tap(bot, ctx, chat, "ezy:menu:auto")
-    assert "step 1/2" in _tap(bot, ctx, chat, "ezy:auto_add")
-    assert "step 2/2" in _tap(bot, ctx, chat, "ezy:style:auto:scalping")
+    assert "swing \u00b7 normal" in _tap(bot, ctx, chat, "ezy:menu:auto")
+    assert "step 1/3" in _tap(bot, ctx, chat, "ezy:auto_add")
+    assert "step 2/3" in _tap(bot, ctx, chat, "ezy:style:auto:scalping")
     _tap(bot, ctx, chat, "ezy:mode:auto:safe")
     _tap(bot, ctx, chat, "ezy:auto_go")
     assert sorted(p.style for p in svc.list_autopilots(77)) == ["scalping", "swing"]
@@ -79,8 +79,8 @@ def test_autopilot_flow_back_buttons_stay_in_the_flow(tmp_path):
     _tap(bot, ctx, chat, "ezy:menu:auto")
     _tap(bot, ctx, chat, "ezy:style:auto:intraday")
     _tap(bot, ctx, chat, "ezy:mode:auto:aggressive")
-    assert "step 2/2" in _tap(bot, ctx, chat, "ezy:back:auto:mode")
-    assert "step 1/2" in _tap(bot, ctx, chat, "ezy:back:auto:style")
+    assert "step 2/3" in _tap(bot, ctx, chat, "ezy:back:auto:mode")
+    assert "step 1/3" in _tap(bot, ctx, chat, "ezy:back:auto:style")
     assert svc.list_autopilots(77) == []
 
 
@@ -92,7 +92,41 @@ def test_autopilot_stop_one_style_keeps_the_other(tmp_path):
     svc.start_autopilot(77, "scalping", "safe")
     assert "Stop autopilot (swing/normal)?" in _tap(bot, ctx, chat, "ezy:auto_stop:swing")
     left = _tap(bot, ctx, chat, "ezy:auto_stop_yes:swing")
-    assert "scalping/safe" in left and "swing" not in left
+    assert "scalping \u00b7 safe" in left and "swing" not in left
     assert [p.style for p in svc.list_autopilots(77)] == ["scalping"]
     assert "Autopilot stopped." in _tap(bot, ctx, chat, "ezy:auto_stop_yes")
     assert svc.list_autopilots(77) == []
+
+
+def test_autopilot_scope_toggles_exclude_classes(tmp_path):
+    bot, svc = _bot(tmp_path)
+    ctx = SimpleNamespace(user_data={}, bot=None)
+    chat = _Chat(77)
+    _tap(bot, ctx, chat, "ezy:menu:auto")
+    _tap(bot, ctx, chat, "ezy:style:auto:swing")
+    text = _tap(bot, ctx, chat, "ezy:mode:auto:normal")
+    assert "step 3/3" in text and "Confirm autopilot" in text
+    text = _tap(bot, ctx, chat, "ezy:auto_x:crypto")
+    assert "without Crypto" in text
+    text = _tap(bot, ctx, chat, "ezy:auto_x:stocks")
+    assert "Metals & CFDs and Forex only" in text
+    # toggling back re-includes the class
+    text = _tap(bot, ctx, chat, "ezy:auto_x:crypto")
+    assert "without Stocks" in text
+    # every class off is refused: the last one stays on
+    for cls in ("metals", "forex", "crypto"):
+        text = _tap(bot, ctx, chat, f"ezy:auto_x:{cls}")
+    assert "only" in text
+    started = _tap(bot, ctx, chat, "ezy:auto_go")
+    assert "Autopilot live" in started
+    pilot = svc.list_autopilots(77)[0]
+    assert len(pilot.exclude) == 3 and pilot._order
+    from app import constants
+    assert all(constants.asset_class(p) not in pilot.exclude for p in pilot._order)
+
+
+def test_typed_autopilot_flags_exclude_classes(tmp_path):
+    bot, svc = _bot(tmp_path)
+    assert bot._parse_scope_args(["-crypto", "no-stocks", "--forex", "junk"]) == [
+        "crypto", "stocks", "forex"]
+    assert bot._parse_scope_args([]) == []
