@@ -143,20 +143,43 @@ def _spot_candles(n=60, start=1_700_000_000_000):
 
 
 def _gold_hub():
-    """Hub whose spot metal ticker 404s and whose futures ticker serves."""
+    """Hub whose spot metal (Binance token) 404s and whose Yahoo futures
+    ticker serves."""
     hub = DataHub()
     hub.binance.validate = lambda s: False
     calls = {"spot": 0, "fut": 0}
 
-    def cfd_klines(symbol, interval, limit=200):
-        if symbol == "XAUUSD=X":
-            calls["spot"] += 1
-            raise _HTTPError(404)
+    def spot_klines(symbol, interval, limit=200):
+        assert symbol == "PAXGUSDT"
+        calls["spot"] += 1
+        raise _HTTPError(404)
+
+    def fut_klines(symbol, interval, limit=200):
+        assert symbol == "GC=F"
         calls["fut"] += 1
         return _spot_candles()[-limit:]
 
-    hub.cfd.fetch_klines = cfd_klines
+    hub.binance.fetch_klines = spot_klines
+    hub.cfd.fetch_klines = fut_klines
     return hub, calls
+
+
+def test_gold_is_served_by_binance_token_and_reads_as_the_cfd():
+    hub = DataHub()
+    hub.binance.fetch_klines = lambda symbol, interval, limit=200: (
+        _spot_candles()[-limit:] if symbol == "PAXGUSDT" else None)
+    hub.binance.fetch_ticker = lambda symbol: {
+        "price": 4470.0, "change_pct": 0.5, "high": 4480.0, "low": 4450.0,
+        "volume": 1e6, "kind": constants.KIND_CRYPTO, "asset": "PAXG",
+        "quote": "USDT"}
+    hub.cfd.fetch_klines = lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("futures must not be asked while spot serves"))
+    a, mode = hub.fetch_klines_ex("XAUUSD", "5m", 50)
+    assert mode == "live" and a[-1]["source"] == "binance"
+    tick = hub.fetch_ticker("XAUUSD")
+    assert tick["symbol"] == "XAUUSD" and tick["kind"] == constants.KIND_CFD
+    assert tick["asset"] == "XAU" and tick["quote"] == "USD"
+    assert tick["price"] == 4470.0
 
 
 def test_spot_metal_404_is_remembered_and_fallback_serves():
@@ -190,17 +213,16 @@ def test_only_404_marks_a_venue_dead():
     hub.binance.validate = lambda s: False
     calls = {"spot": 0}
 
-    def cfd_klines(symbol, interval, limit=200):
-        if symbol == "XAUUSD=X":
-            calls["spot"] += 1
-            raise _HTTPError(503)
-        return _spot_candles()
+    def spot_klines(symbol, interval, limit=200):
+        calls["spot"] += 1
+        raise _HTTPError(503)
 
-    hub.cfd.fetch_klines = cfd_klines
+    hub.binance.fetch_klines = spot_klines
+    hub.cfd.fetch_klines = lambda symbol, interval, limit=200: _spot_candles()[-limit:]
     hub.fetch_klines_ex("XAUUSD", "5m", 50)
     hub.fetch_klines_ex("XAUUSD", "15m", 50)
     assert calls["spot"] == 2  # an outage is not a missing ticker
-    assert not hub._venue_dead("XAUUSD=X")
+    assert not hub._venue_dead("PAXGUSDT")
 
 
 def test_futures_only_cfd_404_is_a_real_failure():

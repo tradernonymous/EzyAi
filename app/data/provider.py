@@ -493,6 +493,9 @@ class DataHub:
             except Exception:
                 pass
         elif kind == constants.KIND_CFD:
+            # tokenized spot metals trade on Binance; futures/indices on Yahoo
+            if sym in constants.CFD_SPOT.values():
+                return self.binance
             return self.cfd
         elif kind == constants.KIND_FOREX:
             return self.forex
@@ -505,9 +508,10 @@ class DataHub:
 
     @staticmethod
     def _cfd_fallback(symbol, sym):
-        """The futures ticker to retry with when a spot metal fails, else
-        None. Returns None once `sym` already IS the futures ticker, so a
-        failure there is a real failure and not an endless retry."""
+        """The Yahoo futures ticker to retry with when a spot metal (the
+        Binance token) fails, else None. Returns None once `sym` already IS
+        the futures ticker, so a failure there is a real failure and not an
+        endless retry."""
         up = symbol.upper()
         spot = constants.CFD_SPOT.get(up)
         if spot is None or sym != spot:
@@ -607,9 +611,9 @@ class DataHub:
                                    interval, type(partner).__name__,
                                    type(exc).__name__, exc)
         if fb_sym is not None:
-            # spot metal did not resolve: fall back to the futures ticker so
-            # the pair keeps working, priced off the basis rather than not
-            # at all. The provider stamp is unchanged; only the venue moves.
+            # the spot token did not serve: fall back to the futures ticker
+            # so the pair keeps working, priced off the basis rather than not
+            # at all. The stamp follows the venue: this series is Yahoo's.
             try:
                 candles = validate_candles(
                     self.cfd.fetch_klines(fb_sym, interval, limit), fb_sym)
@@ -660,6 +664,12 @@ class DataHub:
                 tick["mode"] = DEMO if partner is self.demo else LIVE
                 self.mode = tick["mode"]
                 tick["symbol"] = symbol.upper()
+                if kind == constants.KIND_CFD and partner is self.binance:
+                    # PAXG quotes in USDT per ounce; the user asked for the
+                    # gold CFD, so label it as such rather than as a token.
+                    tick["kind"] = kind
+                    tick["asset"] = symbol.upper()[:3]
+                    tick["quote"] = "USD"
                 return tick
             except Exception as exc:
                 last_error = exc

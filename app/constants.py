@@ -193,16 +193,19 @@ CFD_UNIVERSE = {
     "GER40": "^GDAXI",
 }
 
-# Metals are quoted SPOT, not off the futures book. GC=F/SI=F carry a basis
-# to spot of tens of dollars on gold, so a scalp entry priced off the future
-# is nowhere near what a bullion broker fills; and the futures session thins
-# out overnight and on CME holidays, which reads downstream as a dead feed
-# while the user's platform is still quoting. Yahoo serves spot under the FX
-# convention. CFD_UNIVERSE stays the fallback when a spot ticker is
-# unavailable, so nothing breaks if one of these stops resolving.
+# Gold is quoted SPOT, not off the futures book. GC=F carries a basis to
+# spot of tens of dollars, so a scalp entry priced off the future is
+# nowhere near what a bullion broker fills; and the futures session thins
+# out overnight and shuts on CME holidays, which reads downstream as a dead
+# feed while the user's platform is still quoting. Yahoo has no spot metal
+# ticker at all (XAUUSD=X, XAU=X and friends all 404), so spot comes from
+# Binance's tokenized gold, PAXG: each token is one troy ounce of vaulted
+# gold, it trades around the clock within a fraction of a percent of the
+# London fix, and it is served by the same Binance client as crypto.
+# CFD_UNIVERSE stays the fallback when the token fails to serve, so nothing
+# breaks if Binance is down. Silver has no liquid token and stays on SI=F.
 CFD_SPOT = {
-    "XAUUSD": "XAUUSD=X",
-    "XAGUSD": "XAGUSD=X",
+    "XAUUSD": "PAXGUSDT",
 }
 
 # Chart links only -- TradingView has no free data API and its feed may not
