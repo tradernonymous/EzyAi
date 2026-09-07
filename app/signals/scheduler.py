@@ -11,6 +11,8 @@ import time
 from datetime import datetime, timezone
 
 from .. import constants
+from ..data import quality
+from ..data.provider import DataHub
 from . import engine as signal_engine
 from .autopilot import AutoPilot
 
@@ -53,7 +55,8 @@ def add_months(ts, months):
 
 
 class Service:
-    def __init__(self, hub, state_path, pro_ids=(), admin_id=None, on_alert=None):
+    def __init__(self, hub, state_path, pro_ids=(), admin_id=None, on_alert=None,
+                 calendar=None):
         self.hub = hub
         self.state_path = state_path
         self.watches = {}
@@ -68,6 +71,10 @@ class Service:
         self.settings = {}  # admin-tunable knobs (trial_days), persisted
         self.pro_ids = {int(i) for i in pro_ids}
         self.admin_id = admin_id
+        # Phase-3D event calendar. When None the blackout gate is a no-op
+        # (older tests and embedded use), keeping the scheduler agnostic to
+        # its data source.
+        self.calendar = calendar
         # Best-effort operator notification: callable(text). Set by main.
         self.on_alert = on_alert
         self._alert_ts = {}
@@ -97,6 +104,21 @@ class Service:
                            type(exc).__name__, exc)
 
     # -- alerts -----------------------------------------------------------
+    # -- calendar ---------------------------------------------------------
+    def in_calendar_blackout(self, now=None):
+        """3D: True when a high-impact release has opened a blackout window
+        for signal emission. No-op when no calendar is configured. Fail-open
+        on feed trouble: the bot must keep running through a calendar
+        outage."""
+        cal = self.calendar
+        if cal is None:
+            return False
+        try:
+            return cal.in_blackout(now=now)
+        except Exception as exc:
+            logger.warning("calendar blackout check failed: %s", exc)
+            return False
+
     def _alert(self, key, text):
         now = time.time()
         if now - self._alert_ts.get(key, 0.0) < ALERT_THROTTLE_S:
@@ -670,6 +692,31 @@ class Service:
             self.autopilots[key] = AutoPilot(self.hub, chat_id, style, mode)
             self._save()
 
+    def universe_size(self, style):
+        """Pairs in the universe that may serve this style (3C: scalping is
+        crypto-only because it needs real-time data; everything else scans
+        the whole universe)."""
+        return sum(1 for p in constants.ALL_UNIVERSE
+                   if quality.style_allowed(p, style))
+
+    def migrate_scalping_watches(self):
+        """3C startup pass: any scalping watch on a pair whose feed is only
+        delayed gets demoted to intraday, because the scheduler will refuse
+        to emit it anyway. Returns a list of (chat_id, pair) that changed so
+        main.py can DM each owner."""
+        demoted = []
+        with self._lock:
+            for key, w in list(self.watches.items()):
+                if w.get("style") == "scalping" and \
+                        not quality.style_allowed(w["pair"], "scalping"):
+                    w["style"] = "intraday"
+                    w.pop("last_signal_side", None)
+                    w["last_signal_ts"] = 0.0
+                    demoted.append((w["chat_id"], w["pair"]))
+            if demoted:
+                self._save()
+        return demoted
+
     def stop_autopilot(self, chat_id):
         key = str(chat_id)
         with self._lock:
@@ -738,6 +785,7 @@ class Service:
             return memo[k]
 
         due = []
+        blackout = self.in_calendar_blackout()
         with self._lock:
             watches = list(self.watches.values())
         for watch in watches:
@@ -750,16 +798,35 @@ class Service:
                 continue
             if not self._backoff_ok(key, now, interval):
                 continue
+            # 3D: a high-impact release suppresses EVERYTHING for the whole
+            # window, before the daily cap so a blackout spends no allowance.
+            if blackout:
+                continue
             self.last_check[key] = now
             due.append(watch)
 
         async def run_watch(watch):
             try:
-                _, signal = await analyze(watch["pair"], watch["style"], watch["mode"])
+                pair, style, mode = (watch["pair"], watch["style"],
+                                     watch["mode"])
+                _a, signal = await analyze(pair, style, mode)
             except Exception as exc:
                 self._note_feed_result(watch["key"], watch["pair"], exc)
                 return None
             self._note_feed_result(watch["key"], watch["pair"], None)
+            # 3C emission gate: a scalping watch on a delayed feed (or any
+            # watch whose data fell through to synthetic) must never alert.
+            # DataHub-only: test seams feed the scheduler during unit tests
+            # and must be able to produce signals for assert-freeing.
+            if isinstance(self.hub, DataHub):
+                ok, why = quality.may_emit(
+                    watch["pair"], watch["style"],
+                    source=(_a or {}).get("data_source"),
+                    data_mode=(_a or {}).get("data_mode"))
+                if not ok:
+                    logger.warning("suppressed %s %s: %s", watch["pair"],
+                                   watch["style"], why)
+                    return None
             return signal
 
         results = await asyncio.gather(*(run_watch(w) for w in due))
@@ -788,6 +855,11 @@ class Service:
             style_profile = constants.STYLE_PROFILE[pilot.style]
             cadence = max(style_profile["check_interval_s"] * 2, 120)
             if now - pilot.last_run < cadence:
+                continue
+            # 3D: same global suppression for autopilot -- the scan is
+            # skipped entirely (no fetch, no cap usage, no last_run update)
+            # so the scanner consumes nothing during the blackout.
+            if blackout:
                 continue
             try:
                 async with sem:

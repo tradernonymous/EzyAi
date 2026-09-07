@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from app import billing, config, health
 from app.bot import Bot
+from app.data.calendar import Calendar
 from app.data.provider import DataHub
 from app.signals.scheduler import Service, StateError
 
@@ -213,6 +214,28 @@ def init_sentry():
         logger.warning("sentry init failed: %s", exc)
 
 
+def _reject_demo_with_pay(service):
+    """3A: refuse to run demo data alongside any active paid/comped access."""
+    if not config.allow_demo_data():
+        return
+    now = datetime.datetime.now(datetime.timezone.utc).timestamp()
+    active = [c for c, p in service.plans.items()
+              if p.get("until", 0) >= now and p.get("plan") in ("trial", "pro")]
+    if active or service.pro_ids or config.admin_id():
+        who = (f"{len(active)} active plan(s), pro_ids={bool(service.pro_ids)}, "
+               f"admin set={bool(config.admin_id())}")
+        logger.critical(
+            "EZYAI_DEMO_DATA is enabled while paid access exists "
+            "(%s). Refusing to start: demo data must never back a signal "
+            "for a paying user.", who)
+        print("=" * 60)
+        print("EZYAI_DEMO_DATA=1 is set but there are active company/paid "
+              "accounts.")
+        print("Fix the data feed (live providers), then unset the demo flag.")
+        print("=" * 60)
+        sys.exit(2)
+
+
 def check_optional_deps():
     """Fail at boot, not at the first payment, when a paid-path dependency
     is missing from the image."""
@@ -257,9 +280,15 @@ def main():
     check_optional_deps()
 
     hub = DataHub(allow_demo=config.allow_demo_data())
+    cal = Calendar(url=config.calendar_url(), poll_s=config.calendar_poll_s())
     service = Service(hub, config.state_file(),
                       pro_ids=config.pro_access_ids(),
-                      admin_id=config.admin_id())
+                      admin_id=config.admin_id(), calendar=cal)
+    # 3A: demo data is a development safety net, never a way to sell signals.
+    # If the instance is running in demo mode there must be no paying or
+    # comped accounts, or it is refusing to enter a state where a user or a
+    # feed mix-up could make demo prices look like a live product.
+    _reject_demo_with_pay(service)
     bot = Bot(token, hub, service, demo_ok=config.allow_demo_data(),
               pay_config={"usdt_address": config.usdt_address(),
                           "admin_id": config.admin_id(),
@@ -278,6 +307,25 @@ def main():
         global _EZY_LOOP
         _EZY_LOOP = asyncio.get_running_loop()
         await bot.post_init_hook(app)
+        # 3C: demote scalping watches that can no longer be served real-time
+        # and tell their owners (runs on the bot loop so DMs can be sent).
+        try:
+            demoted = service.migrate_scalping_watches()
+            for chat_id, pair in demoted:
+                await app.bot.send_message(
+                    chat_id,
+                    f"⚠️ <b>{pair}: scalping switched to intraday</b>\n\n"
+                    f"{pair} is priced from a delayed feed, so live scalp "
+                    f"alerts are no longer possible on it. Your watch now "
+                    f"uses the intraday style \u2014 same alerts, longer "
+                    f"timeframe. Scalping is still available on crypto pairs "
+                    f"(BTCUSD, ETHUSD, SOLUSD + others) with live data.",
+                    parse_mode="HTML")
+            if demoted:
+                admin_alert(app, f"Demoted {len(demoted)} scalping watch(es) "
+                                 "to intraday (delayed-feed pairs).")
+        except Exception as exc:
+            logger.error("migration DM failed: %s", exc)
         if service.load_error:
             admin_alert(app, f"Bot started with saves DISABLED: {service.load_error}")
 

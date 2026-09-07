@@ -4,13 +4,21 @@ from . import patterns as pat
 from . import regime as rg
 from . import sentiment as sent
 from .. import constants
+from ..data import freshness as fr
+from ..data.provider import DataHub
 
 PATTERN_POINTS = 4.0
 SENTIMENT_POINTS = 3.0
 SENTIMENT_CUT = 0.15
 
 
-def _spec(side, price, atr_value, support_levels, resistance_levels, mode_profile):
+def _spec(side, price, atr_value, support_levels, resistance_levels,
+          mode_profile, spread_bps=0):
+    # 3E: the stop is widened by the (static) bid/ask spread so that what the
+    # bot quotes is what the broker can actually fill. The take-profit sizes
+    # are kept, so the R:R falls; a setup that can no longer meet the style's
+    # target is dropped instead of emitted with a fictionally-wide R:R.
+    spread_price = price * spread_bps / 10000.0
     if side == "long":
         s_ref = support_levels[0] if support_levels else None
         floor = s_ref - atr_value * mode_profile["sl_atr_mult"] if s_ref else \
@@ -19,7 +27,7 @@ def _spec(side, price, atr_value, support_levels, resistance_levels, mode_profil
             floor = price - atr_value * mode_profile["sl_atr_mult"]
         rr = mode_profile["rr"]
         sl_dist = max(price - floor, atr_value * mode_profile["sl_atr_mult"] * 0.5)
-        sl = price - sl_dist
+        sl = price - sl_dist - spread_price
         tp1 = price + sl_dist * rr
         tp2 = price + sl_dist * rr * 2.0
         entry_limit = s_ref if s_ref and (price - s_ref) < atr_value * 2 else price
@@ -32,11 +40,17 @@ def _spec(side, price, atr_value, support_levels, resistance_levels, mode_profil
             ceil = price + atr_value * mode_profile["sl_atr_mult"]
         rr = mode_profile["rr"]
         sl_dist = max(ceil - price, atr_value * mode_profile["sl_atr_mult"] * 0.5)
-        sl = price + sl_dist
+        sl = price + sl_dist + spread_price
         tp1 = price - sl_dist * rr
         tp2 = price - sl_dist * rr * 2.0
         entry_limit = r_ref if r_ref and (r_ref - price) < atr_value * 2 else price
         zone = (price, max(entry_limit, price))
+    eff_risk = sl_dist + spread_price
+    if eff_risk <= 0:
+        return None
+    rr_eff = sl_dist * rr / eff_risk
+    if rr_eff < rr * 0.8:
+        return None  # spread ate too much of the target R:R: no setup
     return {
         "market": price,
         "limit": entry_limit,
@@ -45,8 +59,9 @@ def _spec(side, price, atr_value, support_levels, resistance_levels, mode_profil
         "sl": sl,
         "tp1": tp1,
         "tp2": tp2,
-        "rr": rr,
+        "rr": rr_eff,
         "risk_pct": mode_profile["risk_frac"] * 100.0,
+        "spread_estimate": spread_bps,
     }
 
 
@@ -288,13 +303,23 @@ def analyze(pair, style, mode, hub, interval=None, sentiment=None):
         dir_candles, mode_b = fetch_ex(pair, direction_tf, style_profile["candles"])
         conf_candles, mode_c = fetch_ex(pair, confirm_tf, style_profile["candles"])
         data_mode = "demo" if "demo" in (mode_a, mode_b, mode_c) else "live"
+        source = candles[-1].get("source") if candles else None
     else:  # test stubs and older hubs
         candles = hub.fetch_klines(pair, base_tf, style_profile["candles"])
         dir_candles = hub.fetch_klines(pair, direction_tf, style_profile["candles"])
         conf_candles = hub.fetch_klines(pair, confirm_tf, style_profile["candles"])
         data_mode = getattr(hub, "mode", "live")
+        source = (candles[-1].get("source") if candles
+                  else getattr(hub, "mode", None))
     if not candles or not dir_candles or not conf_candles:
         raise ValueError(f"no candles for {pair}")
+    # 3B: never analyse a stale/gapped/implausible series. On rejection the
+    # scheduler counts this as a feed failure and backs off -- degraded data
+    # is skipped, never silently consumed.
+    if isinstance(hub, DataHub):
+        ok, why = fr.check(candles, base_tf)
+        if not ok:
+            raise ValueError(f"quality gate: {pair} {why}")
 
     closes = [c["close"] for c in candles]
     price = closes[-1]
@@ -347,7 +372,8 @@ def analyze(pair, style, mode, hub, interval=None, sentiment=None):
     confluence = {"pattern": 0, "sentiment": sentiment, "vol_ratio": None,
                   "session": "open"}
     if side != "neutral":
-        spec = _spec(side, price, atr_v, sup_lv, res_lv, mode_profile)
+        spec = _spec(side, price, atr_v, sup_lv, res_lv, mode_profile,
+                     spread_bps=constants.spread_bps(pair))
         gates = constants.SIGNAL_GATES[style]
         # Phase-3 confluence: factual notes always shown (zero signal
         # impact); confidence points only when CONFLUENCE_SCORING is on,
@@ -428,6 +454,8 @@ def analyze(pair, style, mode, hub, interval=None, sentiment=None):
             "bb": {"upper": bb_up_l, "mid": bb_mid_l, "lower": bb_lo_l},
             "stoch": {"k": st_k_l, "d": st_d_l},
         },
+        "data_source": source,
+        "quality_note": _quality_note(pair, style, hub),
         "levels": {"support": sup_lv, "resistance": res_lv},
         "side": side,
         "spec": spec,
@@ -439,6 +467,15 @@ def analyze(pair, style, mode, hub, interval=None, sentiment=None):
         "hold_horizon": style_profile["hold"],
         "data_mode": data_mode,
     }
+
+
+def _quality_note(pair, style, hub):
+    """Quality warning for informational /analyze output. None on test stubs
+    and internal hubs so the message stays clean off production feeds."""
+    if not isinstance(hub, DataHub):
+        return None
+    from ..data import quality
+    return quality.quality_warning(pair, style)
 
 
 def _fmt(v):

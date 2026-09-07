@@ -1,10 +1,15 @@
 import contextlib
+import logging
 import random
 import time
 from datetime import datetime, timezone
 
 from .. import constants
+from ..data import quality
+from ..data.provider import DataHub
 from . import engine as signal_engine
+
+logger = logging.getLogger(__name__)
 
 
 class AutoPilot:
@@ -21,7 +26,8 @@ class AutoPilot:
         # simultaneous rows fan out across the universe instead of hammering
         # the same symbols; scanning advances a round-robin cursor.
         rng = random.Random(chat_id)
-        self._order = list(constants.ALL_UNIVERSE)
+        self._order = [p for p in constants.ALL_UNIVERSE
+                       if quality.style_allowed(p, style)]
         rng.shuffle(self._order)
         self._cursor = 0
 
@@ -68,6 +74,7 @@ class AutoPilot:
             return None, "daily signal limit reached"
 
         best = None
+        best_analysis = None
         for pair in self._slice(self.batch):
             try:
                 analysis, signal = signal_engine.quick_analyze(
@@ -78,8 +85,20 @@ class AutoPilot:
                 continue
             self.recent.append(pair)
             self.recent = self.recent[-6:]
+            # 3C emission gate: scalping requires real-time crypto; a feed
+            # that fell through to synthetic data must never emit either.
+            # Only enforced on DataHub: other hubs are test seams and signal
+            # logic must run against them regardless of provenance.
+            if isinstance(self.hub, DataHub):
+                ok, why = quality.may_emit(
+                    pair, self.style, source=analysis.get("data_source"),
+                    data_mode=analysis.get("data_mode"))
+                if not ok:
+                    logger.warning("autopilot suppressed %s %s: %s", pair,
+                                   self.style, why)
+                    continue
             if signal and (best is None or signal["confidence"] > best["confidence"]):
-                best = signal
+                best, best_analysis = signal, analysis
 
         if best is None:
             return None, None

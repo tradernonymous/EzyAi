@@ -89,6 +89,11 @@ def analysis_report(a):
         lines.append(f"\u2022 Position sizing: size = (capital \u00d7 {spec['risk_pct']:.1f}%) / (entry \u2212 stop)")
         lines.append(f"\u2022 Horizon: {a['hold_horizon']}")
     lines.append("")
+    # 3C: /analyze is informational so it runs on delayed feeds too -- but
+    # the quality note is printed from the same copy the buttons use, so it
+    # can never drift from what the commands enforce.
+    if a.get("quality_note"):
+        lines.append(a["quality_note"])
     lines.append("\U000026a0\ufe0f Educational confluence only. Not financial advice. Demo data can be used "
                  "when live feeds fail \u2014 verify prices with your broker before acting.")
     return "\n".join(lines)
@@ -102,6 +107,13 @@ def signal_message(sig, source="watch"):
     lines.append(f"{BADGE[sig['side']]} <b>{SIDE_LABEL[sig['side']]}</b> \u00b7 "
                  f"{constants.STYLE_PROFILE[sig['style']]['label']} \u00b7 "
                  f"{constants.MODE_PROFILE[sig['mode']]['label']} \u00b7 TF {sig['tf']}")
+    # 3A provenance stamp on every live message; synthetic/demo data is
+    # flagged loudly so a signal can never look like real data.
+    if sig.get("data_source") == "synthetic" or sig.get("data_mode") == "demo":
+        lines.append("\U0001f6a8 <b>DEMO DATA</b> \u2014 prices may be simulated. "
+                     "Verify before acting.")
+    elif sig.get("data_source") not in (None, "binance", "ccxt"):
+        lines.append(f"Data feed: {sig['data_source']}")
     lines.append(f"Entry zone: <b>{price(sig['entry_zone'][0])}</b> \u2013 <b>{price(sig['entry_zone'][1])}</b>")
     lines.append(f"Stop loss : <b>{price(sig['sl'])}</b> \u00b7 RR target {sig['rr']:.1f}")
     lines.append(f"TP1: <b>{price(sig['tp1'])}</b> \u00b7 TP2: <b>{price(sig['tp2'])}</b> \u00b7 "
@@ -800,6 +812,17 @@ def watch_added_text(pair, style, mode):
 def auto_started_text(style, mode):
     return (f"\u2705 Autopilot live: {style}/{mode}\n"
             "Scanning random pairs for you. Sit back.")
+
+
+def auto_universe_note(style, universe_size):
+    """Line appended to the autopilot start message when the style restricts
+    the scanned universe (scalping = crypto-only)."""
+    if style not in ("scalping",):
+        return ""
+    live = universe_size
+    total = len(constants.ALL_UNIVERSE)
+    return (f"\n\n\U0001f30d Scalping scans crypto pairs only: {live} of {total} "
+            "in the universe use real-time exchange data.")
 
 
 def autopilot_view(pilots):

@@ -721,6 +721,11 @@ class Bot:
                     "Use the buttons: safe, normal or aggressive.")
         if await self._resolve(pair) is None:
             return f"Unknown symbol <b>{escape(pair)}</b>."
+        # 3C: a blocked pair/style combo never gets persisted, even when the
+        # user typed the command directly and skipped the style buttons.
+        from ..data import quality
+        if not quality.style_allowed(pair, style):
+            return quality.rejection_message(pair, style)
         return None
 
     def _add_watch(self, update, pair, style, mode):
@@ -775,7 +780,8 @@ class Bot:
                               reply_markup=ui.style_keyboard("auto"))
             return
         self.service.start_autopilot(update.effective_chat.id, style, mode)
-        await self._reply(update, msg.auto_started_text(style, mode))
+        note = msg.auto_universe_note(style, self.service.universe_size(style))
+        await self._reply(update, msg.auto_started_text(style, mode) + note)
 
     async def _auto_entry(self, update, ctx, query=None):
         """Autopilot button: running -> status + stop, else setup flow."""
@@ -1224,6 +1230,12 @@ class Bot:
             if style not in constants.STYLES or not pair:
                 await self._restart(update, ctx, flow_name, query)
                 return
+            # 3C: never accept a blocked combination via a crafted callback
+            from ..data import quality
+            if not quality.style_allowed(pair, style):
+                await self._reply(update, quality.rejection_message(pair, style),
+                                  reply_markup=ui.retry_pair_keyboard(flow_name))
+                return
             flow["style"] = style
             if flow_name == "auto":
                 text = (f"{ui.FLOW_TITLE['auto']} \u2014 step 2/2\n"
@@ -1318,7 +1330,8 @@ class Bot:
                 return
             ctx.user_data.pop(self._flow_key(), None)
             self.service.start_autopilot(chat_id, style, mode)
-            await self._edit_or_send(query, msg.auto_started_text(style, mode),
+            note = msg.auto_universe_note(style, self.service.universe_size(style))
+            await self._edit_or_send(query, msg.auto_started_text(style, mode) + note,
                                      ui.help_keyboard())
             return
 

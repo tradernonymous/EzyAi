@@ -100,6 +100,20 @@ def health_stale_s():
         return 180
 
 
+def calendar_url():
+    """ForexFactory calendar feed the blackout gate polls (3D)."""
+    return env("EZYAI_CALENDAR_URL",
+               "https://nfs.faireconomy.media/ff_calendar_thisweek.json")
+
+
+def calendar_poll_s():
+    """How often to refresh the calendar feed."""
+    try:
+        return int(env("EZYAI_CALENDAR_POLL_S", "600"))
+    except ValueError:
+        return 600
+
+
 def site_username_match():
     """Claim website purchases by Telegram username (legacy). Turn off once
     the site issues redeem codes: handles can change owners."""

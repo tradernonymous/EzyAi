@@ -217,6 +217,35 @@ ALL_UNIVERSE = (
 # callbacks hit the kline cache on subsequent runs.
 SCAN_BATCH = 3
 
+# Phase-3E: static bid/ask spread estimates in basis points, per pair.
+# The scheduler widens the stop by this amount and drops setups whose R:R
+# drops below the style target. These are config-time constants because the
+# scalable style needs quoted SL/TP/TARGET BEFORE the broker touch -- a live
+# spread check at every minute would nuke the Yahoo rate budget.
+SPREAD_DEFAULT_BPS = 25
+SPREAD_ESTIMATES = {
+    "BTCUSD": 2, "BTCUSDT": 2, "ETHUSD": 2, "ETHUSDT": 2,
+    "BNBUSD": 3, "SOLUSD": 4, "XRPUSD": 4, "ADAUSD": 5,
+    "DOGEUSD": 8, "AVAXUSD": 6, "LINKUSD": 6, "LTCUSD": 5,
+    "TRXUSD": 8, "SUIUSD": 6, "ARBUSD": 5, "OPUSD": 5,
+    "DOTUSD": 6, "ATOMUSD": 8, "NEARUSD": 8, "INJUSD": 8,
+    "APTUSD": 8, "FILUSD": 10, "PEPEUSD": 12, "SHIBUSD": 15,
+    "ENAUSD": 10, "ONDOUSD": 10, "AAVEUSD": 8, "UNIUSD": 8,
+    "XLMUSD": 6, "VETUSD": 10, "ICPUSD": 10, "HBARUSD": 8,
+}
+
+
+def spread_bps(pair):
+    """Phase-3E spread estimate for a pair. Crypto majors lean single-digit
+    bps, everything unknown gets the conservative default (which widens SL
+    by a still-tiny fraction of price on big-TF styles)."""
+    s = pair.upper()
+    if s in SPREAD_ESTIMATES:
+        return SPREAD_ESTIMATES[s]
+    if s in FX_UNIVERSE or s in CFD_UNIVERSE or s in CRYPTO_UNIVERSE:
+        return SPREAD_ESTIMATES.get(s, SPREAD_DEFAULT_BPS)
+    return SPREAD_DEFAULT_BPS
+
 CRYPTO_REVERSE_URL = {
     "BTCUSD": "https://www.blockchain.com/explorer/transactions/btc",
     "ETHUSD": "https://etherscan.io",

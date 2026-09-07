@@ -222,10 +222,13 @@ def custom_pair_keyboard(flow):
     ]])
 
 
-def style_keyboard(flow):
+def style_keyboard(flow, pair=None):
+    from .data import quality
+    styles = (quality.allowed_styles(pair, list(constants.STYLES))
+              if pair else list(constants.STYLES))
     rows = [[InlineKeyboardButton(
         f"{STYLE_EMOJI[s]} {s.capitalize()} ({STYLE_HINT[s]})",
-        callback_data=cb_style(flow, s))] for s in constants.STYLES]
+        callback_data=cb_style(flow, s))] for s in styles]
     # autopilot has no pair step: its Back goes to the main menu instead
     back = (InlineKeyboardButton("\U0001f3e0 Menu", callback_data=cb_menu("dash"))
             if flow == "auto" else
@@ -344,7 +347,7 @@ def prompt_pair(flow):
 
 def prompt_style(flow, pair):
     return (f"{FLOW_TITLE[flow]} \u2014 step 2/3\n<b>{escape(pair)}</b>: pick a style:",
-            style_keyboard(flow))
+            style_keyboard(flow, pair))
 
 
 def prompt_mode(flow, pair, style):

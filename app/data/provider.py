@@ -72,6 +72,15 @@ def validate_candles(candles, symbol=""):
     return out
 
 
+def stamp_source(candles, source):
+    """Tag a candle series with the provider that served it (for the
+    data-quality gate). The last bar carries the stamp; every bar in a
+    series comes from the same provider."""
+    if candles:
+        candles[-1]["source"] = source
+    return candles
+
+
 class BinanceProvider:
     BASES = [
         "https://data-api.binance.vision",
@@ -326,6 +335,9 @@ class CcxtProvider:
 class SyntheticProvider:
     def __init__(self, seed_pairs=None):
         self.pairs = set(seed_pairs or [])
+        # Synthetic data must never look like a live feed: the demo flag and
+        # the source stamp are what the quality gate reads (3C).
+        self.mode = DEMO
 
     @staticmethod
     def _seed(symbol, interval):
@@ -368,7 +380,7 @@ class SyntheticProvider:
             vol = rng.uniform(10, 100) * price
             candles.append(make_candle(ts, o, hi, lo, c, vol))
             price = c
-        return candles
+        return stamp_source(candles, "synthetic")
 
     def fetch_ticker(self, symbol, candles=None):
         candles = candles or self.fetch_klines(symbol, "1h", limit=24)
@@ -503,7 +515,12 @@ class DataHub:
                     del self._cache[k]
 
     def fetch_klines_ex(self, symbol, interval, limit=200):
-        """(candles, mode) where mode is LIVE or DEMO for this very fetch."""
+        """(candles, mode) where mode is LIVE or DEMO for this very fetch.
+
+        Every returned candle list is stamped with the serving provider
+        ("binance" | "ccxt" | "yahoo" | "synthetic") so the data-quality
+        gate can verify provenance at emission time -- a crypto pair whose
+        feed fell through to synthetic data must never back a live signal."""
         key = ("k", symbol.upper(), interval, limit)
         hit = self._cache_get(key, self._cache_ttl(interval))
         if hit is not None:
@@ -517,6 +534,14 @@ class DataHub:
         if partner is not None:
             try:
                 candles = validate_candles(partner.fetch_klines(sym, interval, limit), sym)
+                if partner is self.demo:
+                    stamp_source(candles, "synthetic")
+                elif isinstance(partner, CcxtProvider):
+                    stamp_source(candles, "ccxt")
+                elif isinstance(partner, YahooProvider):
+                    stamp_source(candles, "yahoo")
+                else:
+                    stamp_source(candles, "binance")
                 mode = DEMO if partner is self.demo else LIVE
                 self.mode = mode
                 self._cache_put(key, (candles, mode))
@@ -528,6 +553,7 @@ class DataHub:
         if kind == constants.KIND_CRYPTO:
             try:
                 candles = validate_candles(self.ccxt.fetch_klines(sym, interval, limit), sym)
+                stamp_source(candles, "ccxt")
                 self.mode = LIVE
                 self._cache_put(key, (candles, LIVE))
                 return candles, LIVE
@@ -537,7 +563,9 @@ class DataHub:
                                type(exc).__name__, exc)
         if self.allow_demo:
             self.mode = DEMO
-            return self.demo.fetch_klines(sym, interval, limit), DEMO
+            candles = self.demo.fetch_klines(sym, interval, limit)
+            stamp_source(candles, "synthetic")
+            return candles, DEMO
         if partner is None:
             raise ValueError(f"Unknown symbol: {symbol}")
         raise last_error
