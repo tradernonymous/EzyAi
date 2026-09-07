@@ -99,7 +99,7 @@ def test_malformed_rows_are_skipped_not_fatal(tmp_path):
     }))
     svc = Service(object(), path)
     assert svc.load_error is None
-    assert list(svc.watches) == ["2:ETHUSD"]
+    assert list(svc.watches) == ["2:ETHUSD:swing"]
     assert svc.is_pro(9)
 
 
@@ -154,8 +154,57 @@ def test_watch_cap_per_chat(tmp_path):
     for i in range(constants.MAX_WATCHES):
         assert svc.add_watch(6, f"P{i}USD", "intraday", "normal") is not None
     assert svc.add_watch(6, "EXTRAUSD", "intraday", "normal") is None
-    # re-adding an existing pair is an update, not a new slot
-    assert svc.add_watch(6, "P0USD", "swing", "safe") is not None
+    # a second style on a watched pair is a new slot, so it hits the cap too
+    assert svc.add_watch(6, "P0USD", "swing", "safe") is None
+    # re-adding an existing pair+style is an update, not a new slot
+    assert svc.add_watch(6, "P0USD", "intraday", "safe") is not None
+    assert len(svc.list_watches(6)) == constants.MAX_WATCHES
+
+
+def test_one_watch_per_pair_and_style(tmp_path):
+    svc = _svc(tmp_path)
+    for style in ("scalping", "intraday", "swing"):
+        assert svc.add_watch(7, "XAUUSD", style, "normal") is not None
+    rows = svc.list_watches(7)
+    assert sorted(w["style"] for w in rows) == ["intraday", "scalping", "swing"]
+    # a mode change on one style updates that row and keeps its history
+    svc.watches["7:XAUUSD:swing"]["last_signal_ts"] = 123.0
+    svc.watches["7:XAUUSD:swing"]["last_signal_side"] = "long"
+    upd = svc.add_watch(7, "XAUUSD", "swing", "aggressive")
+    assert upd["mode"] == "aggressive" and upd["last_signal_ts"] == 123.0
+    assert upd["last_signal_side"] == "long"
+    assert len(svc.list_watches(7)) == 3
+    # removal: one style, then everything left on the pair
+    assert svc.remove_watch(7, "xauusd", "intraday") is True
+    assert sorted(w["style"] for w in svc.list_watches(7)) == ["scalping", "swing"]
+    assert svc.remove_watch(7, "XAUUSD", "intraday") is False
+    assert svc.remove_watch(7, "XAUUSD") is True
+    assert svc.list_watches(7) == []
+    assert svc.remove_watch(7, "XAUUSD") is False
+
+
+def test_multiple_styles_survive_a_restart(tmp_path):
+    svc = _svc(tmp_path)
+    for style in ("scalping", "intraday", "swing"):
+        svc.add_watch(8, "EURUSD", style, "normal")
+    svc.add_watch(8, "BTCUSD", "swing", "safe")
+    again = _svc(tmp_path)
+    assert sorted((w["pair"], w["style"]) for w in again.list_watches(8)) == [
+        ("BTCUSD", "swing"), ("EURUSD", "intraday"),
+        ("EURUSD", "scalping"), ("EURUSD", "swing")]
+    assert set(again.watches) == {"8:EURUSD:scalping", "8:EURUSD:intraday",
+                                  "8:EURUSD:swing", "8:BTCUSD:swing"}
+
+
+def test_rows_keyed_by_pair_alone_load_under_the_new_key(tmp_path):
+    # state written before styles were part of the key carries "chat:pair"
+    svc = _svc(tmp_path)
+    svc._apply({"watches": [
+        {"key": "9:AAPL", "chat_id": 9, "pair": "AAPL", "style": "swing",
+         "mode": "normal", "added_ts": 1.0, "last_signal_ts": 5.0}]})
+    assert list(svc.watches) == ["9:AAPL:swing"]
+    assert svc.watches["9:AAPL:swing"]["key"] == "9:AAPL:swing"
+    assert svc.remove_watch(9, "AAPL", "swing") is True
 
 
 # -- tick behaviour ---------------------------------------------------------------
@@ -207,11 +256,11 @@ def test_feed_failures_are_counted_and_backed_off(tmp_path):
     try:
         for _ in range(sched.FEED_ALERT_AFTER):
             # bypass the exponential backoff so every iteration counts one
-            svc.last_check["12:BTCUSD"] = 0.0
+            svc.last_check["12:BTCUSD:intraday"] = 0.0
             asyncio.run(svc.tick(send))
     finally:
         eng.quick_analyze = orig
-    assert svc._feed_failures["12:BTCUSD"] == sched.FEED_ALERT_AFTER
+    assert svc._feed_failures["12:BTCUSD:intraday"] == sched.FEED_ALERT_AFTER
     assert any("BTCUSD" in a for a in alerts)
 
 

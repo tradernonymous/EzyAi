@@ -529,7 +529,8 @@ class Service:
         watches, autopilots, users, plans = {}, {}, {}, {}
         for w in data.get("watches") or []:
             try:
-                key = self._watch_key(w["chat_id"], w["pair"])
+                key = self._watch_key(w["chat_id"], w["pair"], w["style"])
+                w["key"] = key  # rows written before styles were keyed
                 w.setdefault("last_signal_ts", 0.0)
                 w.setdefault("last_signal_side", None)
                 watches[key] = w
@@ -654,34 +655,55 @@ class Service:
 
     # -- watches ------------------------------------------------------------
     @staticmethod
-    def _watch_key(chat_id, pair):
-        return f"{chat_id}:{pair}"
+    def _watch_key(chat_id, pair, style):
+        # One watch per chat, pair AND style: the same pair can be watched
+        # for a scalp, an intraday move and a swing at once, each with its
+        # own cadence and its own last-signal history. Keying on the pair
+        # alone made each add silently replace the one before it.
+        return f"{chat_id}:{pair}:{style}"
 
     def add_watch(self, chat_id, pair, style, mode):
-        """Store a watch. Returns None when the per-chat cap is reached."""
+        """Store a watch. Returns None when the per-chat cap is reached.
+        Re-adding the same pair and style updates its mode in place and
+        keeps the signal history, so a mode change never re-fires the last
+        setup."""
         pair = pair.upper()
-        key = self._watch_key(chat_id, pair)
+        key = self._watch_key(chat_id, pair, style)
         now = time.time()
         with self._lock:
-            if key not in self.watches and \
+            existing = self.watches.get(key)
+            if existing is None and \
                     len(self.list_watches(chat_id)) >= constants.MAX_WATCHES:
                 return None
-            self.watches[key] = {
-                "key": key, "chat_id": chat_id, "pair": pair,
-                "style": style, "mode": mode, "added_ts": now,
-                "last_signal_ts": 0.0, "last_signal_side": None,
-            }
+            if existing is not None:
+                existing["mode"] = mode
+            else:
+                self.watches[key] = {
+                    "key": key, "chat_id": chat_id, "pair": pair,
+                    "style": style, "mode": mode, "added_ts": now,
+                    "last_signal_ts": 0.0, "last_signal_side": None,
+                }
             self._save()
             return self.watches[key]
 
-    def remove_watch(self, chat_id, pair):
-        key = self._watch_key(chat_id, pair.upper())
+    def remove_watch(self, chat_id, pair, style=None):
+        """Remove one watch (pair + style) or, with no style, every watch
+        on that pair for the chat. True when anything was removed."""
+        pair = pair.upper()
         with self._lock:
-            if key in self.watches:
-                del self.watches[key]
+            if style is not None:
+                keys = [self._watch_key(chat_id, pair, style)]
+            else:
+                keys = [k for k, w in self.watches.items()
+                        if w["chat_id"] == chat_id and w["pair"] == pair]
+            removed = False
+            for key in keys:
+                if key in self.watches:
+                    del self.watches[key]
+                    removed = True
+            if removed:
                 self._save()
-                return True
-            return False
+            return removed
 
     def list_watches(self, chat_id):
         with self._lock:
@@ -712,9 +734,16 @@ class Service:
             for key, w in list(self.watches.items()):
                 if w.get("style") == "scalping" and \
                         not quality.style_allowed(w["pair"], "scalping"):
-                    w["style"] = "intraday"
-                    w.pop("last_signal_side", None)
-                    w["last_signal_ts"] = 0.0
+                    del self.watches[key]
+                    new_key = self._watch_key(w["chat_id"], w["pair"], "intraday")
+                    if new_key not in self.watches:
+                        # the style is part of the key, so the row moves;
+                        # an intraday watch already there keeps its history
+                        w["style"] = "intraday"
+                        w["key"] = new_key
+                        w.pop("last_signal_side", None)
+                        w["last_signal_ts"] = 0.0
+                        self.watches[new_key] = w
                     demoted.append((w["chat_id"], w["pair"]))
             if demoted:
                 self._save()

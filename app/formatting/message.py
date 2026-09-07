@@ -1061,7 +1061,7 @@ def help_text():
         "    STYLE: scalping | intraday | swing\n"
         "    MODE:  safe | normal | aggressive\n"
         "/watches \u2014 list your active watches\n"
-        "/unwatch PAIR \u2014 stop alerts for a pair\n"
+        "/unwatch PAIR [STYLE] \u2014 stop alerts for a pair (one style, or all)\n"
         "/autopilot STYLE MODE \u2014 random-pair auto signals\n"
         "/stopautopilot \u2014 stop random signals\n\n"
         "\U0001f464 <b>Account</b>\n"
