@@ -2,7 +2,9 @@ import logging
 import random
 import threading
 import time
+from datetime import datetime, timezone
 
+from .. import config
 from .. import constants
 
 logger = logging.getLogger(__name__)
@@ -332,6 +334,125 @@ class CcxtProvider:
         }
 
 
+class OandaProvider:
+    """Real-time FX & metals candles via the OANDA v3 API.
+
+    Only constructed when a key is configured. The candles it serves are
+    stamped "oanda", which the data-quality gate treats as REALTIME -- so
+    scalping opens up on covered pairs while this feed is healthy, and any
+    fallback to Yahoo automatically degrades the tier back to DELAYED (the
+    emit gate then suppresses scalping exactly like an outage). The static
+    tier for the pair follows the same rule via `oanda_instrument()`.
+    """
+
+    BASES = {
+        "practice": "https://api-fxpractice.oanda.com/v3",
+        "live": "https://api-fxtrade.oanda.com/v3",
+    }
+    GRANULARITY = {
+        "1m": "M1", "5m": "M5", "15m": "M15", "30m": "M30",
+        "1h": "H1", "4h": "H4", "1d": "D",
+    }
+
+    @staticmethod
+    def instrument(symbol):
+        return constants.OANDA_INSTRUMENTS.get(str(symbol).upper())
+
+    @staticmethod
+    def granularity(interval):
+        return OandaProvider.GRANULARITY.get(interval, "M5")
+
+    @staticmethod
+    def _ts(oanda_time):
+        base, _, frac = oanda_time.partition(".")
+        dt = datetime.strptime(base, "%Y-%m-%dT%H:%M:%S").replace(
+            tzinfo=timezone.utc)
+        return int(dt.timestamp() * 1000) + int((frac.rstrip("Z")[:3] or "0"))
+
+    @staticmethod
+    def parse_candles(payload):
+        out = []
+        for c in payload.get("candles") or []:
+            mid = c.get("mid") or {}
+            o, h, low, close = (mid.get("o"), mid.get("h"),
+                                mid.get("l"), mid.get("c"))
+            if None in (o, h, low, close):
+                continue
+            out.append(make_candle(
+                OandaProvider._ts(c["time"]),
+                float(o), float(h), float(low), float(close),
+                float(c.get("volume") or 0.0)))
+        return out
+
+    def __init__(self, timeout=10):
+        import requests
+        self.key = config.oanda_key().strip()
+        self.base = self.BASES.get(config.oanda_environment(),
+                                   self.BASES["live"])
+        self.timeout = timeout
+        self.session = requests.Session()
+        self.session.headers.update({
+            "Authorization": f"Bearer {self.key}",
+            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                          "EzyAiBot/1.0",
+        })
+
+    def _get(self, path, params=None):
+        def call():
+            r = self.session.get(self.base + path, params=params,
+                                 timeout=self.timeout)
+            r.raise_for_status()
+            return r.json()
+        return with_retry(call, attempts=3)
+
+    def validate(self, symbol):
+        return self.instrument(symbol) is not None
+
+    def fetch_klines(self, symbol, interval, limit=200):
+        inst = self.instrument(symbol)
+        if inst is None:
+            raise ValueError(f"No OANDA instrument: {symbol}")
+        payload = self._get(f"/instruments/{inst}/candles", {
+            "price": "M",
+            "granularity": self.granularity(interval),
+            "count": int(limit),
+        })
+        return self.parse_candles(payload)
+
+    def fetch_ticker(self, symbol, candles=None):
+        candles = candles or self.fetch_klines(symbol, "1m", limit=5)
+        last = candles[-1]
+        prev = candles[0]["close"] if len(candles) > 1 else last["close"]
+        chg = 0.0
+        if prev:
+            chg = (last["close"] - prev) / prev * 100
+        inst = self.instrument(symbol)
+        base, _, quote = inst.partition("_")
+        kind = (constants.KIND_FOREX
+                if symbol.upper() in constants.FX_UNIVERSE
+                else constants.KIND_CFD)
+        return {
+            "price": last["close"],
+            "change_pct": chg,
+            "high": max(c["high"] for c in candles),
+            "low": min(c["low"] for c in candles),
+            "volume": float(sum(c["volume"] for c in candles)),
+            "kind": kind,
+            "asset": base,
+            "quote": quote,
+        }
+
+
+def oanda_instrument(symbol):
+    """OANDA instrument for a pair when the real-time feed is configured,
+    else None. Single router for the quality tier -- keep in sync with
+    DataHub.partner()."""
+    if not config.oanda_enabled():
+        return None
+    return OandaProvider.instrument(symbol)
+
+
 class SyntheticProvider:
     def __init__(self, seed_pairs=None):
         self.pairs = set(seed_pairs or [])
@@ -407,6 +528,7 @@ class DataHub:
         self.forex = YahooProvider(kind=constants.KIND_FOREX)
         self.stock = YahooProvider(kind=constants.KIND_STOCK)
         self.cfd = YahooProvider(kind=constants.KIND_CFD)
+        self.oanda = OandaProvider() if config.oanda_enabled() else None
         self.demo = SyntheticProvider(constants.ALL_UNIVERSE)
         self.allow_demo = allow_demo
         # Mode of the most recent fetch, for the dashboard's feed label only.
@@ -482,8 +604,12 @@ class DataHub:
             except Exception:
                 pass
         elif kind == constants.KIND_CFD:
+            if self.oanda is not None and oanda_instrument(symbol):
+                return self.oanda
             return self.cfd
         elif kind == constants.KIND_FOREX:
+            if self.oanda is not None and oanda_instrument(symbol):
+                return self.oanda
             return self.forex
         elif kind == constants.KIND_STOCK:
             return self.stock
@@ -540,6 +666,8 @@ class DataHub:
                     stamp_source(candles, "ccxt")
                 elif isinstance(partner, YahooProvider):
                     stamp_source(candles, "yahoo")
+                elif isinstance(partner, OandaProvider):
+                    stamp_source(candles, "oanda")
                 else:
                     stamp_source(candles, "binance")
                 mode = DEMO if partner is self.demo else LIVE
@@ -561,6 +689,21 @@ class DataHub:
                 last_error = last_error or exc
                 logger.warning("klines %s %s via ccxt failed: %s: %s", sym, interval,
                                type(exc).__name__, exc)
+        if isinstance(partner, OandaProvider):
+            # OANDA hiccup: fall back to the delayed Yahoo feed and let the
+            # quality gate see the "yahoo" stamp. Intraday/swing keep working;
+            # scalping is suppressed at emission instead of emitting fiction.
+            fb = self.forex if kind == constants.KIND_FOREX else self.cfd
+            try:
+                candles = validate_candles(fb.fetch_klines(sym, interval, limit), sym)
+                stamp_source(candles, "yahoo")
+                self.mode = LIVE
+                self._cache_put(key, (candles, LIVE))
+                return candles, LIVE
+            except Exception as exc:
+                last_error = last_error or exc
+                logger.warning("klines %s %s via yahoo fallback failed: %s: %s",
+                               sym, interval, type(exc).__name__, exc)
         if self.allow_demo:
             self.mode = DEMO
             candles = self.demo.fetch_klines(sym, interval, limit)
@@ -602,6 +745,18 @@ class DataHub:
                 last_error = last_error or exc
                 logger.warning("ticker %s via ccxt failed: %s: %s", sym,
                                type(exc).__name__, exc)
+        if isinstance(partner, OandaProvider):
+            fb = self.forex if kind == constants.KIND_FOREX else self.cfd
+            try:
+                tick = fb.fetch_ticker(sym)
+                tick["mode"] = LIVE
+                self.mode = LIVE
+                tick["symbol"] = symbol.upper()
+                return tick
+            except Exception as exc:
+                last_error = last_error or exc
+                logger.warning("ticker %s via yahoo fallback failed: %s: %s",
+                               sym, type(exc).__name__, exc)
         if self.allow_demo:
             self.mode = DEMO
             tick = self.demo.fetch_ticker(sym)

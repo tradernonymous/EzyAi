@@ -4,9 +4,11 @@ app/data/quality.py
 Single source of truth for data-quality tiering and the scalping restriction.
 
 RULE (3C):
-  Scalping is only available on pairs served by real exchange data (crypto via
-  Binance / ccxt). Yahoo-backed pairs are delayed proxies with gaps and bad
-  prints, which makes scalp-timeframe entry/SL/TP levels fiction.
+  Scalping is only available on pairs served by real-time feeds. Crypto uses
+  real exchange data (Binance / ccxt); FX and metals (XAUUSD, XAGUSD) switch
+  to the real-time OANDA v3 feed when OANDA_API_KEY is configured. Yahoo-
+  backed pairs are delayed proxies with gaps and bad prints, which makes
+  scalp-timeframe entry/SL/TP levels fiction.
 
   Enforcement differs by surface:
     /watch, /autopilot   -> reject with a clear message
@@ -16,9 +18,9 @@ RULE (3C):
   Other styles are unchanged on all pairs.
 
 DO NOT duplicate the pair->tier logic anywhere else. Every caller imports
-from here. The static tier reuses DataHub.classify() as the router; the
-runtime tier reads the provider stamp that DataHub.fetch_klines_ex() writes
-onto every candle it returns.
+from here. The static tier reuses DataHub.classify() + oanda_instrument()
+as the router; the runtime tier reads the provider stamp that
+DataHub.fetch_klines_ex() writes onto every candle it returns.
 """
 
 from __future__ import annotations
@@ -49,13 +51,16 @@ def static_tier(pair: str) -> Tier:
     Tier a pair by its CONFIGURED provider, without touching the network.
 
     Uses DataHub.classify() as the single pair->venue router, so this can
-    never disagree with what the fetch path actually does: crypto resolves to
-    Binance/ccxt, every other venue to Yahoo.
+    never disagree with what the fetch path actually does: crypto resolves
+    to Binance/ccxt and stays realtime; FX and metals become realtime once
+    the OANDA feed is configured; every other venue stays on Yahoo.
     """
     kind = _prov.DataHub.classify(pair)
     if kind is None:
         return Tier.DELAYED  # conservative: an unknown pair is not realtime
     if kind == constants.KIND_CRYPTO:
+        return Tier.REALTIME
+    if _prov.oanda_instrument(pair) is not None:
         return Tier.REALTIME
     return Tier.DELAYED
 
@@ -79,17 +84,17 @@ def runtime_tier(source: Optional[str], data_mode: Optional[str] = None) -> Tier
     Tier the data that was ACTUALLY returned, after fetching.
 
     `source` is the provider stamp DataHub writes onto the candles it serves
-    ("binance", "ccxt", "yahoo", "synthetic"). `data_mode` is the legacy
-    live/demo flag. A pair configured as Binance that fell through to the
-    synthetic provider is no longer realtime, and static_tier() cannot know
-    that -- this check is the one that catches it.
+    ("binance", "ccxt", "oanda", "yahoo", "synthetic"). `data_mode` is the
+    legacy live/demo flag. A pair configured as realtime that fell through
+    to the synthetic provider is no longer realtime, and static_tier()
+    cannot know that -- this check is the one that catches it.
 
     Unknown provenance is treated as DELAYED: usable for permissive styles,
     never enough for scalping.
     """
     if data_mode == "demo" or source == "synthetic":
         return Tier.SYNTHETIC
-    if source in ("binance", "ccxt"):
+    if source in ("binance", "ccxt", "oanda"):
         return Tier.REALTIME
     return Tier.DELAYED
 
@@ -129,10 +134,11 @@ def rejection_message(pair: str, style: str) -> str:
     """Shown when a user tries to set up a blocked combination."""
     return (
         f"⚠️ <b>{style.capitalize()} not available on {pair}</b>\n\n"
-        f"{pair} is priced from a delayed feed with gaps, so scalp-timeframe "
-        f"entries and stops would not match your broker.\n\n"
-        f"Scalping is available on crypto pairs (BTCUSD, ETHUSD, SOLUSD and "
-        f"others) which use live exchange data.\n\n"
+        f"{pair} is priced from a delayed feed with gaps on this instance, "
+        f"so scalp-timeframe entries and stops would not match your broker.\n\n"
+        f"Scalping is available on pairs backed by live feeds \u2014 crypto "
+        f"(BTCUSD, ETHUSD, SOLUSD and others) plus FX and gold/silver when "
+        f"the real-time data connection is on.\n\n"
         f"For {pair}, try <b>intraday</b> or <b>swing</b> instead."
     )
 

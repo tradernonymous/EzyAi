@@ -203,6 +203,18 @@ CFD_TRADINGVIEW = {
     "GER40": "TVC:DAX",
 }
 
+# Real-time FX & metals via the OANDA v3 API (brief 3C option 2: scalping on
+# FX and XAUUSD). A covered pair is tiered REALTIME while OANDA_API_KEY is
+# configured; everything else keeps the Yahoo delayed feed. Instrument names
+# are OANDA's PRIMARY form (EUR_USD, XAU_USD, ...).
+OANDA_INSTRUMENTS = {
+    "EURUSD": "EUR_USD", "GBPUSD": "GBP_USD", "USDJPY": "USD_JPY",
+    "AUDUSD": "AUD_USD", "USDCHF": "USD_CHF", "USDCAD": "USD_CAD",
+    "NZDUSD": "NZD_USD", "EURGBP": "EUR_GBP", "EURJPY": "EUR_JPY",
+    "GBPJPY": "GBP_JPY",
+    "XAUUSD": "XAU_USD", "XAGUSD": "XAG_USD",
+}
+
 ALL_UNIVERSE = (
     CRYPTO_UNIVERSE
     + list(FX_UNIVERSE.keys())

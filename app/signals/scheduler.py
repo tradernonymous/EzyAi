@@ -694,8 +694,9 @@ class Service:
 
     def universe_size(self, style):
         """Pairs in the universe that may serve this style (3C: scalping is
-        crypto-only because it needs real-time data; everything else scans
-        the whole universe)."""
+        limited to pairs on live real-time feeds -- crypto, and FX/metals
+        when the OANDA feed is configured; everything else scans the whole
+        universe)."""
         return sum(1 for p in constants.ALL_UNIVERSE
                    if quality.style_allowed(p, style))
 

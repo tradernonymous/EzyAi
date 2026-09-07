@@ -876,13 +876,13 @@ def auto_started_text(style, mode):
 
 def auto_universe_note(style, universe_size):
     """Line appended to the autopilot start message when the style restricts
-    the scanned universe (scalping = crypto-only)."""
+    the scanned universe (scalping = real-time feeds only)."""
     if style not in ("scalping",):
         return ""
     live = universe_size
     total = len(constants.ALL_UNIVERSE)
-    return (f"\n\n\U0001f30d Scalping scans crypto pairs only: {live} of {total} "
-            "in the universe use real-time exchange data.")
+    return (f"\n\n\U0001f30d Scalping scans pairs on live feeds: {live} of "
+            f"{total} in the universe are real-time right now.")
 
 
 def autopilot_view(pilots):
