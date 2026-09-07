@@ -656,6 +656,75 @@ def calibration_report(cal):
     return "\n".join(lines)
 
 
+def _age(seconds):
+    if seconds is None:
+        return "-"
+    secs = int(seconds)
+    m, s = divmod(secs, 60)
+    h, m = divmod(m, 60)
+    if h:
+        return f"{h}h {m}m"
+    if m:
+        return f"{m}m {s}s"
+    return f"{s}s"
+
+
+SOURCE_LABEL = {
+    "oanda": "OANDA v3",
+    "binance": "Binance",
+    "ccxt": "ccxt",
+    "yahoo": "Yahoo (delayed)",
+    "synthetic": "synthetic (demo)",
+}
+
+
+def verify_feed_report(p):
+    """Admin /verifyfeed: how one pair is actually served right now."""
+    e = escape
+    lines = [f"\U0001f4e1 <b>FEED CHECK</b> {e(p['pair'])} \u00b7 {e(p['tf'])}"]
+
+    if p["oanda_enabled"]:
+        env = p.get("oanda_environment") or "live"
+        tail = p.get("oanda_key_tail") or "?"
+        lines.append(f"<b>OANDA</b> on \u00b7 {env} \u00b7 token {tail} \u00b7 "
+                     f"{e(p.get('oanda_base') or '')}")
+        if p.get("oanda_instrument"):
+            lines.append(f"\u2192 maps to <b>{e(p['oanda_instrument'])}</b>")
+        if p["oanda_ok"]:
+            lines.append(f"direct probe \u2705 \u00b7 latest bar "
+                         f"{_age(p['oanda_age_s'])} old")
+        elif p.get("oanda_error"):
+            lines.append(f"direct probe \u274c \u00b7 {e(p['oanda_error'])}")
+    else:
+        lines.append(f"<b>OANDA</b> off \u2014 set <code>OANDA_API_KEY</code> "
+                     f"+ <code>OANDA_ENVIRONMENT</code> and redeploy for live "
+                     f"FX/metals.")
+
+    if p.get("probe_error"):
+        lines.append(f"feed probe failed: {e(p['probe_error'])}")
+        lines.append("\U0001f6a9 Diagnostics only \u00b7 nothing was changed.")
+        return "\n".join(lines)
+
+    label = SOURCE_LABEL.get(p["served_by"], p["served_by"])
+    lines.append(f"serving: <b>{label}</b> \u00b7 {p['tier']} tier")
+    if p["fresh_ok"]:
+        lines.append(f"freshness: \u2705 PASS \u00b7 last bar "
+                     f"{_age(p['last_age_s'])} old")
+    else:
+        lines.append(f"freshness: \u274c {e(p['fresh_reason'] or 'FAIL')}")
+    if not p.get("oanda_ok") and p.get("oanda_instrument") and \
+            p["served_by"] == "yahoo":
+        lines.append("\u26a0\ufe0f OANDA probe failed \u2014 showing the Yahoo "
+                     "fallback; scalp alerts stay suppressed.")
+    if p["scalp_ok"]:
+        lines.append("scalping: allowed \u2705")
+    else:
+        lines.append(f"scalping: blocked \u00b7 {e(p['scalp_reason'] or '')}")
+    lines.append(f"price: <b>{price(p['last_price'])}</b>")
+    lines.append("\U0001f6a9 Diagnostics only \u00b7 nothing was changed.")
+    return "\n".join(lines)
+
+
 def watch_list(rows):
     if not rows:
         return ("No active watches yet \u2014 add your first alert with "

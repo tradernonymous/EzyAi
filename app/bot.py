@@ -26,6 +26,7 @@ from . import site_entitlements
 from . import constants
 from . import ui
 from .analysis import sentiment as _sent
+from .data import probe as feed_probe
 from .data import quality
 from .formatting import message as msg
 from .outcomes.calibration import Calibration
@@ -100,6 +101,7 @@ class Bot:
         a.add_handler(CommandHandler("export", self.cmd_export))
         a.add_handler(CommandHandler("stats", self.cmd_stats))
         a.add_handler(CommandHandler("calibration", self.cmd_calibration))
+        a.add_handler(CommandHandler("verifyfeed", self.cmd_verify_feed))
         a.add_handler(CommandHandler("redeem", self.cmd_redeem))
         a.add_handler(CommandHandler("mkcode", self.cmd_mkcode))
         a.add_handler(CommandHandler("codes", self.cmd_codes))
@@ -274,6 +276,17 @@ class Bot:
             await self._reply(update, "Could not read calibration data right now.")
             return
         await self._reply(update, msg.calibration_report(cal))
+
+    async def cmd_verify_feed(self, update, ctx):
+        """Admin only: one-shot feed diagnostics (OANDA health, tier, latency)."""
+        if not self._is_admin(update):
+            return
+        pair = (ctx.args[0] if ctx.args else "EURUSD").upper()[:24]
+        if await self._resolve(pair) is None:
+            await self._reply(update, f"Unknown symbol <b>{escape(pair)}</b>.")
+            return
+        probe = await asyncio.to_thread(feed_probe.probe_pair, self.hub, pair)
+        await self._reply(update, msg.verify_feed_report(probe))
 
     async def _reply(self, update, text, **kw):
         if not text:
