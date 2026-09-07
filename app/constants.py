@@ -193,6 +193,18 @@ CFD_UNIVERSE = {
     "GER40": "^GDAXI",
 }
 
+# Metals are quoted SPOT, not off the futures book. GC=F/SI=F carry a basis
+# to spot of tens of dollars on gold, so a scalp entry priced off the future
+# is nowhere near what a bullion broker fills; and the futures session thins
+# out overnight and on CME holidays, which reads downstream as a dead feed
+# while the user's platform is still quoting. Yahoo serves spot under the FX
+# convention. CFD_UNIVERSE stays the fallback when a spot ticker is
+# unavailable, so nothing breaks if one of these stops resolving.
+CFD_SPOT = {
+    "XAUUSD": "XAUUSD=X",
+    "XAGUSD": "XAGUSD=X",
+}
+
 # Chart links only -- TradingView has no free data API and its feed may not
 # be redistributed, so these symbols are used to build a chart URL and
 # nothing else. Prices always come from the providers in app/data.

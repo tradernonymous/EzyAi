@@ -157,6 +157,20 @@ def quality_gate_text(pair, style, reason, now=None):
             f"wide to scalp profitably, so no alert is emitted.\n"
             f"\U0001f513 Next window opens {_next_open_text(pair, now)}.")
     if reason.startswith("quality gate: closed:"):
+        # Inside the pair's own window, so the calendar says it should be
+        # trading: what stopped is the feed, not necessarily the market.
+        # Saying "closed until Tuesday" here would be a claim the bot has
+        # not checked -- the window is open now and alerts resume the moment
+        # quotes catch up.
+        win = _regime.scalp_session(pair, now=now)
+        if win is not None and win["in_window"]:
+            return (
+                f"\U0001f4c8 {head} \u2014 quotes have gone quiet.\n\n"
+                f"{e(pair)} is inside {_scalp_label(pair)}, but its last "
+                f"price is too old to scalp on \u2014 a thin holiday "
+                f"session, a halt, or the feed lagging.\n"
+                f"\U0001f504 Nothing to do: alerts resume by themselves as "
+                f"soon as prices update.")
         reopen = _regime.next_session_open(pair, now=now)
         when = _regime.fmt_next_open(reopen) if reopen else "at the start "
         return (
@@ -761,6 +775,8 @@ def verify_feed_report(p):
     lines = [f"\U0001f4e1 <b>FEED CHECK</b> {e(p['pair'])} \u00b7 {e(p['tf'])}"]
     lines.append(f"configured: <b>{p['static_tier']}</b> tier \u00b7 spread "
                  f"estimate {p['spread_bps']} bps")
+    if p.get("venue_symbol"):
+        lines.append(f"venue symbol: <code>{e(p['venue_symbol'])}</code>")
 
     if p.get("window_label"):
         if p.get("in_window"):

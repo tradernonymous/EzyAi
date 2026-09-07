@@ -112,8 +112,16 @@ def scalp_session(pair, now=None):
     now = now or _now()
     dt = datetime.fromtimestamp(now, tz=timezone.utc)
     mins = dt.hour * 60 + dt.minute
-    in_window = any(a <= mins < b for a, b in cfg["windows"])
-    preferred = any(a <= mins < b for a, b in cfg.get("preferred", ()))
+    # Every window here is a weekday London/NY one, so a Saturday 13:00 is
+    # not "inside the window" however well the clock matches -- and callers
+    # read in_window to decide whether a quiet feed means a shut market or a
+    # broken one. next_session_open() already skips the weekend; this keeps
+    # the two consistent.
+    weekend = dt.weekday() >= 5
+    in_window = (not weekend
+                 and any(a <= mins < b for a, b in cfg["windows"]))
+    preferred = (not weekend
+                 and any(a <= mins < b for a, b in cfg.get("preferred", ())))
     return {"class": cls, "in_window": in_window, "preferred": preferred,
             "windows": cfg["windows"], "label": cfg["label"]}
 

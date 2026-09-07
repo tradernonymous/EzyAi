@@ -35,6 +35,7 @@ def probe_pair(hub, pair, tf=PROBE_TF, limit=PROBE_LIMIT):
         "tf": tf,
         "static_tier": quality.static_tier(pair).value,
         "scalp_class": None,
+        "venue_symbol": None,
         "window_label": None,
         "in_window": None,
         "next_open": None,
@@ -52,6 +53,10 @@ def probe_pair(hub, pair, tf=PROBE_TF, limit=PROBE_LIMIT):
 
     from .. import constants
     out["scalp_class"] = constants.scalp_class(pair)
+    try:
+        out["venue_symbol"] = hub.resolve(pair)[1]
+    except Exception:
+        pass
     out["spread_bps"] = constants.spread_bps(pair)
     win = regime.scalp_session(pair)
     if win is not None:
