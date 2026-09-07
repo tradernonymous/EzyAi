@@ -171,7 +171,7 @@ def test_dashboard_view_states():
         style = "swing"
         mode = "safe"
     two = msg.dashboard_view([], [_Pilot(), _Swing()], "live")
-    assert "intraday/normal" in two and "swing/safe" in two
+    assert "intraday \u00b7 normal" in two and "swing \u00b7 safe" in two
 
 
 def test_autopilot_status_lists_every_style_with_its_own_stop():
@@ -180,7 +180,7 @@ def test_autopilot_status_lists_every_style_with_its_own_stop():
         mode = "safe"
     pilots = [_Pilot(), _Swing()]
     text = msg.autopilot_status_text(pilots)
-    assert "intraday/normal" in text and "swing/safe" in text
+    assert "intraday \u00b7 normal" in text and "swing \u00b7 safe" in text
     cbs = _callbacks(ui.autopilot_status_keyboard(pilots))
     assert "ezy:auto_stop:intraday" in cbs and "ezy:auto_stop:swing" in cbs
     assert "ezy:auto_stop" in cbs and "ezy:auto_add" in cbs
@@ -234,7 +234,8 @@ def test_signal_confidence_meter_and_levels():
            "risk_pct": 1.0, "confidence": 78.0, "reasons": ["rsi bounce"],
            "support": [98.0], "resistance": [104.0]}
     t = msg.signal_message(sig)
-    assert "\u25b0" in t and "Levels" in t and "support" in t
+    assert "\u25b0" in t and "Levels" in t and "Support" in t
+    assert "<code>Entry" in t and "<code>Target 2" in t
     assert "Not financial advice" in t
 
 
@@ -245,3 +246,22 @@ def test_confirm_texts_carry_risk():
     assert "swing/safe" in t and "3" in t
     assert "autopilot" in msg.auto_started_text("intraday", "normal").lower()
     assert "live" in msg.watch_added_text("XAUUSD", "swing", "safe").lower()
+
+
+def test_scope_label_reads_naturally():
+    assert msg.scope_label(None) is None and msg.scope_label([]) is None
+    assert msg.scope_label(["crypto"]) == "without Crypto"
+    assert msg.scope_label(["stocks", "crypto"]) == "Metals & CFDs and Forex only"
+    assert msg.scope_label(["stocks", "crypto", "forex"]) == "Metals & CFDs only"
+    assert msg.scope_label(["stocks", "crypto"]) in msg.confirm_auto_text(
+        "swing", "safe", 3, msg.scope_label(["stocks", "crypto"]))
+
+
+def test_scope_keyboard_marks_excluded_classes():
+    cbs = _callbacks(ui.scope_keyboard(["crypto"]))
+    assert "ezy:auto_x:crypto" in cbs and "ezy:auto_x:metals" in cbs
+    assert "ezy:auto_go" in cbs and "ezy:back:auto:mode" in cbs
+    labels = [b.text for row in ui.scope_keyboard(["crypto"]).inline_keyboard for b in row]
+    assert any(l.startswith("\u2b1c") and "Crypto" in l for l in labels)
+    assert any(l.startswith("\u2705") and "Forex" in l for l in labels)
+    assert ui.parse_callback("ezy:auto_x:stocks") == {"a": "auto_x", "cls": "stocks"}

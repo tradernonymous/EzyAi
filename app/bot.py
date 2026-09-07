@@ -828,9 +828,12 @@ class Bot:
             await self._reply(update, "Unknown style/mode \u2014 pick from the buttons:",
                               reply_markup=ui.style_keyboard("auto"))
             return
-        self.service.start_autopilot(update.effective_chat.id, style, mode)
+        exclude = self._parse_scope_args(args[2:])
+        self.service.start_autopilot(update.effective_chat.id, style, mode,
+                                     exclude=exclude)
         note = msg.auto_universe_note(style, self.service.universe_size(style))
-        await self._reply(update, msg.auto_started_text(style, mode) + note)
+        await self._reply(update, msg.auto_started_text(
+            style, mode, msg.scope_label(exclude)) + note)
 
     async def _auto_entry(self, update, ctx, query=None):
         """Autopilot button: running -> status + stop, else setup flow."""
@@ -852,12 +855,35 @@ class Bot:
         """Step 1 of the autopilot flow: pick a style. Reached directly when
         nothing is running, or via "Add style" beside a running scanner."""
         ctx.user_data[self._flow_key()] = {"flow": "auto", "page": 0}
-        text = f"{ui.FLOW_TITLE['auto']} \u2014 step 1/2\nPick a style:"
+        text = f"{ui.FLOW_TITLE['auto']} \u2014 step 1/3\nPick a style:"
         kb = ui.style_keyboard("auto")
         if query is not None:
             await self._edit_or_send(query, text, kb)
         else:
             await self._reply(update, text, reply_markup=kb)
+
+    async def _auto_scope_step(self, query, flow):
+        """Step 3 of the autopilot flow: which asset classes to scan, with
+        the confirmation copy above the toggles."""
+        style, mode = flow["style"], flow["mode"]
+        mp = constants.MODE_PROFILE[mode]
+        exclude = flow.get("exclude") or []
+        text = (f"{ui.FLOW_TITLE['auto']} \u2014 step 3/3\n\n"
+                + msg.confirm_auto_text(style, mode, mp["daily_limit"],
+                                        msg.scope_label(exclude))
+                + "\n\nTap a class to leave it out of the scan:")
+        await self._edit_or_send(query, text, ui.scope_keyboard(exclude))
+
+    @staticmethod
+    def _parse_scope_args(args):
+        """-crypto / -stocks / no-forex style flags -> excluded classes."""
+        keys = {k for k, _ in constants.ASSET_CLASSES}
+        out = []
+        for a in args:
+            t = a.lower().lstrip("-").removeprefix("no-").removeprefix("no")
+            if t in keys and t not in out:
+                out.append(t)
+        return out
 
     async def cmd_stop_autopilot(self, update, ctx):
         """/stopautopilot [STYLE]: confirm stopping one style, or all."""
@@ -1308,7 +1334,7 @@ class Bot:
                 return
             flow["style"] = style
             if flow_name == "auto":
-                text = (f"{ui.FLOW_TITLE['auto']} \u2014 step 2/2\n"
+                text = (f"{ui.FLOW_TITLE['auto']} \u2014 step 2/3\n"
                         f"{style}: pick risk mode:")
                 await self._edit_or_send(query, text, ui.mode_keyboard(flow_name))
             else:
@@ -1347,12 +1373,8 @@ class Bot:
                 if not style:
                     await self._restart(update, ctx, flow_name, query)
                     return
-                mp = constants.MODE_PROFILE[mode]
-                await self._edit_or_send(
-                    query, msg.confirm_auto_text(style, mode, mp["daily_limit"]),
-                    ui.confirm_keyboard("ezy:auto_go",
-                                        ui.cb_back(flow_name, "style"),
-                                        "\U0001f916 Start"))
+                flow.setdefault("exclude", [])
+                await self._auto_scope_step(query, flow)
             return
 
         if action == "back":
@@ -1365,7 +1387,7 @@ class Bot:
                 await self._auto_setup(update, ctx, query)
             elif flow_name == "auto" and step == "mode" and flow.get("style"):
                 style = flow["style"]
-                text = (f"{ui.FLOW_TITLE['auto']} \u2014 step 2/2\n"
+                text = (f"{ui.FLOW_TITLE['auto']} \u2014 step 2/3\n"
                         f"{style}: pick risk mode:")
                 await self._edit_or_send(query, text, ui.mode_keyboard(flow_name))
             elif step == "style" and flow.get("pair"):
@@ -1405,11 +1427,27 @@ class Bot:
             if not style or not mode:
                 await self._restart(update, ctx, "auto", query)
                 return
+            exclude = list(flow.get("exclude") or [])
             ctx.user_data.pop(self._flow_key(), None)
-            self.service.start_autopilot(chat_id, style, mode)
+            self.service.start_autopilot(chat_id, style, mode, exclude=exclude)
             note = msg.auto_universe_note(style, self.service.universe_size(style))
-            await self._edit_or_send(query, msg.auto_started_text(style, mode) + note,
-                                     ui.help_keyboard())
+            await self._edit_or_send(
+                query, msg.auto_started_text(style, mode, msg.scope_label(exclude)) + note,
+                ui.help_keyboard())
+            return
+
+        if action == "auto_x":
+            if flow.get("flow") != "auto" or not flow.get("style") or not flow.get("mode"):
+                await self._restart(update, ctx, "auto", query)
+                return
+            cls = cb["cls"]
+            if cls in {k for k, _ in constants.ASSET_CLASSES}:
+                ex = set(flow.get("exclude") or [])
+                ex.symmetric_difference_update({cls})
+                if len(ex) == len(constants.ASSET_CLASSES):
+                    ex.discard(cls)  # scanning nothing is not a scope
+                flow["exclude"] = sorted(ex)
+            await self._auto_scope_step(query, flow)
             return
 
         if action == "auto_add":

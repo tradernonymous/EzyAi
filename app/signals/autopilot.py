@@ -66,7 +66,7 @@ def _atr_of(row):
 
 
 class AutoPilot:
-    def __init__(self, hub, chat_id, style, mode, batch=None):
+    def __init__(self, hub, chat_id, style, mode, batch=None, exclude=None):
         self.hub = hub
         self.chat_id = chat_id
         self.style = style
@@ -75,14 +75,28 @@ class AutoPilot:
         self.recent = []
         self.last_run = 0.0
         self.last_signal = None
+        # asset classes (constants.ASSET_CLASSES keys) this scanner skips
+        self.exclude = set(exclude or ())
+        self._cursor = 0
+        self._build_order()
+
+    def _build_order(self):
         # Phase-2 ranked scanner: every chat gets a deterministic shuffle so
         # simultaneous rows fan out across the universe instead of hammering
         # the same symbols; scanning advances a round-robin cursor.
-        rng = random.Random(chat_id)
+        rng = random.Random(self.chat_id)
         self._order = [p for p in constants.ALL_UNIVERSE
-                       if quality.style_allowed(p, style)]
+                       if quality.style_allowed(p, self.style)
+                       and constants.asset_class(p) not in self.exclude]
         rng.shuffle(self._order)
-        self._cursor = 0
+        self._cursor = min(self._cursor, max(len(self._order) - 1, 0))
+
+    def set_scope(self, exclude):
+        """Change the excluded classes; the scan order is rebuilt."""
+        new = set(exclude or ())
+        if new != self.exclude:
+            self.exclude = new
+            self._build_order()
 
     def _utc_today(self):
         return datetime.now(timezone.utc).strftime("%Y-%m-%d")

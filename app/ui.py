@@ -12,6 +12,7 @@ Callback scheme (all prefixed ``ezy:``, <=64 bytes):
   ezy:mode:<flow>:<mode>     mode chosen
   ezy:back:<flow>:<step>     back to pair|style|mode step
   ezy:watch_go               confirm adding the watch in flow state
+  ezy:auto_x:<class>         toggle an asset class out of the autopilot scan
   ezy:auto_go                confirm starting autopilot in flow state
   ezy:auto_add               start the setup flow for another style
   ezy:auto_stop[:<style>] / ezy:auto_stop_yes[:<style>]  (all styles without one)
@@ -121,6 +122,25 @@ def cb_back(flow, step):
     return f"ezy:back:{flow}:{step}"
 
 
+def cb_auto_scope(cls):
+    return f"ezy:auto_x:{cls}"
+
+
+def scope_keyboard(exclude):
+    """Step 3 of the autopilot flow: one toggle per asset class (checked =
+    scanned), then Start / Back / Cancel."""
+    ex = set(exclude or ())
+    rows = []
+    for key, label in constants.ASSET_CLASSES:
+        mark = "\u2b1c" if key in ex else "\u2705"
+        rows.append([InlineKeyboardButton(f"{mark} {label}",
+                                          callback_data=cb_auto_scope(key))])
+    rows.append([InlineKeyboardButton("\U0001f916 Start", callback_data="ezy:auto_go"),
+                 InlineKeyboardButton("\u2039 Back", callback_data=cb_back("auto", "mode")),
+                 InlineKeyboardButton("\u2715 Cancel", callback_data="ezy:cancel")])
+    return InlineKeyboardMarkup(rows)
+
+
 def cb_auto_stop(style=None, confirmed=False):
     base = "ezy:auto_stop_yes" if confirmed else "ezy:auto_stop"
     return f"{base}:{style}" if style else base
@@ -207,6 +227,8 @@ def parse_callback(data):
             return {"a": "unknown"}
     if kind in ("auto_stop", "auto_stop_yes") and len(parts) == 3:
         return {"a": kind, "style": parts[2]}
+    if kind == "auto_x" and len(parts) == 3:
+        return {"a": "auto_x", "cls": parts[2]}
     if data in ("ezy:cancel", "ezy:watch_go", "ezy:auto_go", "ezy:auto_add",
                 "ezy:auto_stop", "ezy:auto_stop_yes", "ezy:dash",
                 "ezy:plans", "ezy:trial"):

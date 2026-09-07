@@ -233,3 +233,12 @@ def test_scanner_rotates_without_repeating_recent():
         for p in window:
             assert p not in seen or p in set(pilot.recent)
         seen.update(window)
+
+def test_scanner_scope_excludes_asset_classes():
+    hub = OfflineHub()
+    full = AutoPilot(hub, 5, "intraday", "normal")
+    scoped = AutoPilot(hub, 5, "intraday", "normal", exclude=["crypto", "stocks"])
+    assert scoped._order and len(scoped._order) < len(full._order)
+    assert all(constants.asset_class(p) in ("metals", "forex") for p in scoped._order)
+    scoped.set_scope([])
+    assert scoped._order == full._order  # same seed, same shuffle
