@@ -487,9 +487,9 @@ def test_the_weekend_is_never_inside_a_window():
 def test_metals_resolve_to_spot_with_a_futures_fallback():
     from app.data.provider import DataHub
     hub = DataHub()
-    assert hub.resolve("XAUUSD")[1] == "XAUUSD=X"
-    assert hub.resolve("XAGUSD")[1] == "XAGUSD=X"
-    assert hub._cfd_fallback("XAUUSD", "XAUUSD=X") == "GC=F"
+    assert hub.resolve("XAUUSD")[1] == "PAXGUSDT"
+    assert hub.resolve("XAGUSD")[1] == "SI=F"
+    assert hub._cfd_fallback("XAUUSD", "PAXGUSDT") == "GC=F"
     # once the futures ticker is the one in hand, there is nothing left to
     # fall back to and a failure must surface instead of looping
     assert hub._cfd_fallback("XAUUSD", "GC=F") is None

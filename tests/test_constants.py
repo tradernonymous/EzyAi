@@ -57,8 +57,12 @@ def test_cfd_classified():
         assert hub.classify(tag) == constants.KIND_CFD
     kind, sym = hub.resolve("XAUUSD")
     assert kind == constants.KIND_CFD
-    assert sym == "XAUUSD=X"          # gold is quoted spot, not off GC=F
+    assert sym == "PAXGUSDT"          # gold is quoted spot (tokenized), not off GC=F
+    assert hub.partner("XAUUSD") is hub.binance
     assert hub._cfd_fallback("XAUUSD", sym) == "GC=F"
+    # silver has no liquid token and stays on the futures ticker
+    assert hub.resolve("XAGUSD")[1] == "SI=F"
+    assert hub.partner("XAGUSD") is hub.cfd
     # a pair with no spot ticker resolves straight to its futures/index one
     assert hub.resolve("WTI")[1] == "CL=F"
     assert hub._cfd_fallback("WTI", "CL=F") is None

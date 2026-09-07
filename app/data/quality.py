@@ -5,7 +5,8 @@ Single source of truth for data-quality tiering and the scalping restriction.
 
 RULE:
   Nothing here needs a paid feed. Crypto is priced from real exchange data
-  (Binance, ccxt as fallback); FX, metals, oil, indices and stocks come from
+  (Binance, ccxt as fallback), and so is spot gold, via Binance's tokenized
+  gold (constants.CFD_SPOT); FX, silver, oil, indices and stocks come from
   Yahoo's public chart API, which quotes mid prices only. Yahoo is therefore
   tiered DELAYED, but delayed is not the same as untradeable: what makes a
   scalp fictional is a stale bar, a shut session or a spread that eats the
