@@ -195,7 +195,7 @@ class YahooProvider:
         data = self._get(f"{self.BASE}/{sym}", {
             "interval": y_interval, "range": y_range,
             "includePrePost": "false",
-            "events": "capitalGain%2Cdiv",
+            "events": "capitalGain,div",
         })
         result = data["chart"]["result"][0]
         ts = result["timestamp"]
@@ -415,6 +415,14 @@ class DataHub:
         self.mode = LIVE
         self._cache = {}
         self._cache_lock = threading.Lock()
+        # Venue symbols Yahoo answered 404 for, with the time that verdict
+        # expires. A spot metal ticker that does not exist would otherwise
+        # cost three failed calls and three warnings on every analysis
+        # before the futures fallback served -- with the retry policy that
+        # is real latency in front of every gold signal. Remembering the
+        # miss sends the pair straight to the fallback until the memo
+        # lapses, after which the spot ticker gets one more try.
+        self._dead = {}
 
     @staticmethod
     def classify(symbol):
@@ -506,6 +514,32 @@ class DataHub:
             return None
         return constants.CFD_UNIVERSE.get(up)
 
+    # How long a 404 on a venue symbol is believed before it is retried.
+    DEAD_TTL = 6 * 3600.0
+
+    @staticmethod
+    def _not_found(exc):
+        resp = getattr(exc, "response", None)
+        return getattr(resp, "status_code", None) == 404
+
+    def _venue_dead(self, sym):
+        with self._cache_lock:
+            until = self._dead.get(sym)
+            if until is None:
+                return False
+            if time.time() < until:
+                return True
+            del self._dead[sym]
+            return False
+
+    def _mark_dead(self, sym, fb_sym):
+        with self._cache_lock:
+            fresh = sym not in self._dead
+            self._dead[sym] = time.time() + self.DEAD_TTL
+        if fresh:
+            logger.warning("%s not found upstream; serving %s for the next "
+                           "%.0fh", sym, fb_sym, self.DEAD_TTL / 3600.0)
+
     @staticmethod
     def _cache_ttl(interval):
         # Ten users watching the same pair must not mean ten identical
@@ -545,7 +579,10 @@ class DataHub:
         except ValueError:
             partner = None
         last_error = None
-        if partner is not None:
+        fb_sym = self._cfd_fallback(symbol, sym)
+        if partner is not None and fb_sym is not None and self._venue_dead(sym):
+            last_error = ValueError(f"{sym} not found upstream")
+        elif partner is not None:
             try:
                 candles = validate_candles(
                     partner.fetch_klines(sym, interval, limit), sym)
@@ -563,9 +600,12 @@ class DataHub:
                 return candles, mode
             except Exception as exc:
                 last_error = exc
-                logger.warning("klines %s %s via %s failed: %s: %s", sym, interval,
-                               type(partner).__name__, type(exc).__name__, exc)
-        fb_sym = self._cfd_fallback(symbol, sym)
+                if fb_sym is not None and self._not_found(exc):
+                    self._mark_dead(sym, fb_sym)
+                else:
+                    logger.warning("klines %s %s via %s failed: %s: %s", sym,
+                                   interval, type(partner).__name__,
+                                   type(exc).__name__, exc)
         if fb_sym is not None:
             # spot metal did not resolve: fall back to the futures ticker so
             # the pair keeps working, priced off the basis rather than not
@@ -611,7 +651,10 @@ class DataHub:
         except ValueError:
             partner = None
         last_error = None
-        if partner is not None:
+        fb_sym = self._cfd_fallback(symbol, sym)
+        if partner is not None and fb_sym is not None and self._venue_dead(sym):
+            last_error = ValueError(f"{sym} not found upstream")
+        elif partner is not None:
             try:
                 tick = partner.fetch_ticker(sym)
                 tick["mode"] = DEMO if partner is self.demo else LIVE
@@ -620,9 +663,12 @@ class DataHub:
                 return tick
             except Exception as exc:
                 last_error = exc
-                logger.warning("ticker %s via %s failed: %s: %s", sym,
-                               type(partner).__name__, type(exc).__name__, exc)
-        fb_sym = self._cfd_fallback(symbol, sym)
+                if fb_sym is not None and self._not_found(exc):
+                    self._mark_dead(sym, fb_sym)
+                else:
+                    logger.warning("ticker %s via %s failed: %s: %s", sym,
+                                   type(partner).__name__,
+                                   type(exc).__name__, exc)
         if fb_sym is not None:
             try:
                 tick = self.cfd.fetch_ticker(fb_sym)
