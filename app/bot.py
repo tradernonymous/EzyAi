@@ -23,6 +23,7 @@ from telegram.ext import (
 from . import billing
 from . import health
 from . import site_entitlements
+from . import site_signals
 from . import constants
 from . import ui
 from .analysis import sentiment as _sent
@@ -156,12 +157,25 @@ class Bot:
                 chat_id, msg.signal_message(signal, source=source),
                 reply_markup=ui.followup_keyboard(signal["pair"]))
             if ok and self.service.outcomes is not None:
+                row_id = None
                 try:
-                    self.service.outcomes.record(chat_id, signal, source)
+                    row_id = self.service.outcomes.record(chat_id, signal, source)
                 except Exception as exc:
                     # outcome tracking must never break signal delivery
                     logger.warning("signal record failed: %s: %s",
                                    type(exc).__name__, exc)
+                # The website's public board mirrors autopilot signals only:
+                # a watch alert is one subscriber's private call. The push
+                # is handed to a daemon thread, so the site can never delay
+                # or break the rest of this delivery loop.
+                if row_id is not None and source == "autopilot":
+                    try:
+                        site_signals.publish_signal(
+                            site_signals.external_id_for(row_id), signal)
+                    except Exception as exc:
+                        # the website must never break signal delivery
+                        logger.warning("signal board push failed: %s: %s",
+                                       type(exc).__name__, exc)
         try:
             await self.service.tick(send)
         except Exception as exc:

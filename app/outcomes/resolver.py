@@ -21,6 +21,7 @@ import logging
 import time
 
 from .. import constants
+from .. import site_signals
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +81,11 @@ class Resolver:
         if outcome is not None:
             status, exit_price, r, ambig = outcome
             self.store.mark_resolved(sig["id"], status, exit_price, r, ambig)
+            site_signals.publish_close(sig, status, exit_price, r)
             return
+        # Still open: this pass already holds the freshest price, so the
+        # website card's progress rail is moved from it.
+        site_signals.publish_tick(sig, candles[-1]["close"])
         # No first touch: expire on the style window once only if the
         # fetched history actually reaches the expiry point, so a stale or
         # truncated feed can never fabricate an 'expired' resolution.
@@ -99,6 +104,7 @@ class Resolver:
              if sig["direction"] == "long"
              else (sig["entry"] - exit_price) / risk)
         self.store.mark_resolved(sig["id"], "expired", exit_price, r)
+        site_signals.publish_close(sig, "expired", exit_price, r)
 
 
 def _walk(sig, candles):
