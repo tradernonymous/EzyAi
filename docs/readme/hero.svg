@@ -1,0 +1,152 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="380" viewBox="0 0 1200 380" role="img" aria-label="EzyAi. Free market data in, trading confluence out.">
+  <title>EzyAi</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#050816"/>
+      <stop offset="0.55" stop-color="#0b1030"/>
+      <stop offset="1" stop-color="#1a0b3a"/>
+    </linearGradient>
+    <linearGradient id="neon" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#22d3ee">
+        <animate attributeName="stop-color" values="#22d3ee;#a78bfa;#22d3ee" dur="9s" repeatCount="indefinite"/>
+      </stop>
+      <stop offset="0.5" stop-color="#8b5cf6"/>
+      <stop offset="1" stop-color="#f472b6">
+        <animate attributeName="stop-color" values="#f472b6;#22d3ee;#f472b6" dur="9s" repeatCount="indefinite"/>
+      </stop>
+    </linearGradient>
+    <radialGradient id="glowCyan" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#22d3ee" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#22d3ee" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowPink" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#f472b6" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#f472b6" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="faceTop" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1e2a5a"/>
+      <stop offset="1" stop-color="#2b1b5e"/>
+    </linearGradient>
+    <linearGradient id="faceLeft" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0f1a40"/>
+      <stop offset="1" stop-color="#070b22"/>
+    </linearGradient>
+    <linearGradient id="faceRight" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#151f4d"/>
+      <stop offset="1" stop-color="#0a0f2c"/>
+    </linearGradient>
+    <linearGradient id="sweep" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="3" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="380" rx="24" fill="url(#bg)"/>
+  <g>
+    <line x1="0" y1="380" x2="600" y2="150" stroke="#22d3ee" stroke-opacity="0.10"/>
+    <line x1="60" y1="380" x2="600" y2="150" stroke="#22d3ee" stroke-opacity="0.10"/>
+    <line x1="120" y1="380" x2="600" y2="150" stroke="#22d3ee" stroke-opacity="0.10"/>
+    <line x1="180" y1="380" x2="600" y2="150" stroke="#22d3ee" stroke-opacity="0.10"/>
+    <line x1="240" y1="380" x2="600" y2="150" stroke="#22d3ee" stroke-opacity="0.10"/>
+    <line x1="300" y1="380" x2="600" y2="150" stroke="#22d3ee" stroke-opacity="0.10"/>
+    <line x1="360" y1="380" x2="600" y2="150" stroke="#22d3ee" stroke-opacity="0.10"/>
+    <line x1="420" y1="380" x2="600" y2="150" stroke="#22d3ee" stroke-opacity="0.10"/>
+    <line x1="480" y1="380" x2="600" y2="150" stroke="#22d3ee" stroke-opacity="0.10"/>
+    <line x1="540" y1="380" x2="600" y2="150" stroke="#22d3ee" stroke-opacity="0.10"/>
+    <line x1="600" y1="380" x2="600" y2="150" stroke="#22d3ee" stroke-opacity="0.10"/>
+    <line x1="660" y1="380" x2="600" y2="150" stroke="#22d3ee" stroke-opacity="0.10"/>
+    <line x1="720" y1="380" x2="600" y2="150" stroke="#22d3ee" stroke-opacity="0.10"/>
+    <line x1="780" y1="380" x2="600" y2="150" stroke="#22d3ee" stroke-opacity="0.10"/>
+    <line x1="840" y1="380" x2="600" y2="150" stroke="#22d3ee" stroke-opacity="0.10"/>
+    <line x1="900" y1="380" x2="600" y2="150" stroke="#22d3ee" stroke-opacity="0.10"/>
+    <line x1="960" y1="380" x2="600" y2="150" stroke="#22d3ee" stroke-opacity="0.10"/>
+    <line x1="1020" y1="380" x2="600" y2="150" stroke="#22d3ee" stroke-opacity="0.10"/>
+    <line x1="1080" y1="380" x2="600" y2="150" stroke="#22d3ee" stroke-opacity="0.10"/>
+    <line x1="1140" y1="380" x2="600" y2="150" stroke="#22d3ee" stroke-opacity="0.10"/>
+    <line x1="1200" y1="380" x2="600" y2="150" stroke="#22d3ee" stroke-opacity="0.10"/>
+    <line x1="0.0" y1="380" x2="1200.0" y2="380" stroke="#a78bfa" stroke-opacity="0.15"/>
+    <line x1="120.0" y1="352" x2="1080.0" y2="352" stroke="#a78bfa" stroke-opacity="0.13"/>
+    <line x1="222.8571428571429" y1="328" x2="977.1428571428571" y2="328" stroke="#a78bfa" stroke-opacity="0.11"/>
+    <line x1="308.57142857142856" y1="308" x2="891.4285714285714" y2="308" stroke="#a78bfa" stroke-opacity="0.10"/>
+    <line x1="377.1428571428571" y1="292" x2="822.8571428571429" y2="292" stroke="#a78bfa" stroke-opacity="0.09"/>
+    <line x1="432.8571428571429" y1="279" x2="767.1428571428571" y2="279" stroke="#a78bfa" stroke-opacity="0.08"/>
+    <line x1="480.0" y1="268" x2="720.0" y2="268" stroke="#a78bfa" stroke-opacity="0.07"/>
+    <line x1="518.5714285714286" y1="259" x2="681.4285714285714" y2="259" stroke="#a78bfa" stroke-opacity="0.06"/>
+    <line x1="548.5714285714286" y1="252" x2="651.4285714285714" y2="252" stroke="#a78bfa" stroke-opacity="0.06"/>
+    <line x1="574.2857142857143" y1="246" x2="625.7142857142857" y2="246" stroke="#a78bfa" stroke-opacity="0.05"/>
+  </g>
+  <ellipse cx="150" cy="330" rx="420" ry="220" fill="url(#glowCyan)">
+    <animate attributeName="rx" values="420;470;420" dur="8s" repeatCount="indefinite"/>
+  </ellipse>
+  <ellipse cx="1080" cy="40" rx="380" ry="200" fill="url(#glowPink)">
+    <animate attributeName="rx" values="380;430;380" dur="10s" repeatCount="indefinite"/>
+  </ellipse>
+
+  <!-- isometric cards: chart, bell, robot -->
+  
+  <g transform="translate(700,120)" filter="url(#softGlow)">
+    <polygon points="0,26 150,0 176,13.0 26,39.0" fill="url(#faceTop)" stroke="url(#neon)" stroke-width="1.4"/>
+    <polygon points="0,26 26,39.0 26,139.0 0,126" fill="url(#faceLeft)" stroke="#22d3ee" stroke-opacity="0.35"/>
+    <polygon points="26,39.0 176,13.0 176,113.0 26,139.0" fill="url(#faceRight)" stroke="url(#neon)" stroke-width="1.2"/>
+  </g>
+  <g transform="translate(742,150)">
+    <line x1="10" y1="0" x2="10" y2="76" stroke="#22d3ee" stroke-opacity="0.6"/>
+    <rect x="4" y="20" width="12" height="30" fill="#22d3ee"/>
+    <line x1="40" y1="12" x2="40" y2="88" stroke="#f472b6" stroke-opacity="0.7"/>
+    <rect x="34" y="30" width="12" height="40" fill="#f472b6"/>
+    <line x1="70" y1="-6" x2="70" y2="66" stroke="#22d3ee" stroke-opacity="0.6"/>
+    <rect x="64" y="4" width="12" height="40" fill="#22d3ee"/>
+    <line x1="100" y1="-18" x2="100" y2="50" stroke="#22d3ee" stroke-opacity="0.6"/>
+    <rect x="94" y="-10" width="12" height="36" fill="#22d3ee"/>
+    <polyline points="0,60 30,44 60,30 90,10 120,-6" fill="none" stroke="#ffffff" stroke-opacity="0.7" stroke-width="2" stroke-dasharray="180">
+      <animate attributeName="stroke-dashoffset" values="180;0" dur="3s" repeatCount="indefinite"/>
+    </polyline>
+  </g>
+
+  
+  <g transform="translate(890,200)" filter="url(#softGlow)">
+    <polygon points="0,26 130,0 156,13.0 26,39.0" fill="url(#faceTop)" stroke="url(#neon)" stroke-width="1.4"/>
+    <polygon points="0,26 26,39.0 26,119.0 0,106" fill="url(#faceLeft)" stroke="#22d3ee" stroke-opacity="0.35"/>
+    <polygon points="26,39.0 156,13.0 156,93.0 26,119.0" fill="url(#faceRight)" stroke="url(#neon)" stroke-width="1.2"/>
+  </g>
+  <g transform="translate(930,220)">
+    <path d="M30 6 C14 6 8 20 8 34 L8 50 L2 60 L58 60 L52 50 L52 34 C52 20 46 6 30 6 Z" fill="#a78bfa" fill-opacity="0.9"/>
+    <circle cx="30" cy="66" r="6" fill="#f472b6"/>
+    <circle cx="48" cy="12" r="7" fill="#22d3ee">
+      <animate attributeName="r" values="7;10;7" dur="2.4s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  
+  <g transform="translate(1000,90)" filter="url(#softGlow)">
+    <polygon points="0,26 120,0 146,13.0 26,39.0" fill="url(#faceTop)" stroke="url(#neon)" stroke-width="1.4"/>
+    <polygon points="0,26 26,39.0 26,115.0 0,102" fill="url(#faceLeft)" stroke="#22d3ee" stroke-opacity="0.35"/>
+    <polygon points="26,39.0 146,13.0 146,89.0 26,115.0" fill="url(#faceRight)" stroke="url(#neon)" stroke-width="1.2"/>
+  </g>
+  <g transform="translate(1036,106)">
+    <rect x="6" y="14" width="52" height="40" rx="8" fill="#22d3ee" fill-opacity="0.85"/>
+    <rect x="16" y="26" width="10" height="10" rx="2" fill="#050816"/>
+    <rect x="38" y="26" width="10" height="10" rx="2" fill="#050816"/>
+    <rect x="20" y="42" width="24" height="4" rx="2" fill="#050816"/>
+    <line x1="32" y1="2" x2="32" y2="14" stroke="#f472b6" stroke-width="3"/>
+    <circle cx="32" cy="0" r="4" fill="#f472b6"/>
+  </g>
+
+  <!-- wordmark -->
+  <text x="72" y="178" font-family="Segoe UI, Inter, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="104" font-weight="800" letter-spacing="-2" fill="url(#neon)" filter="url(#glow)">EzyAi</text>
+  <text x="76" y="226" font-family="Segoe UI, Inter, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="30" font-weight="500" fill="#e2e8f0">Free market data in. Trading confluence out.</text>
+  <text x="76" y="268" font-family="Segoe UI, Inter, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" fill="#94a3b8" letter-spacing="3">TELEGRAM  ·  SCALPING  ·  INTRADAY  ·  SWING  ·  NO API KEYS</text>
+  <rect x="76" y="292" width="360" height="3" rx="1.5" fill="url(#neon)"/>
+  <rect x="0" y="0" width="300" height="380" fill="url(#sweep)" opacity="0.6">
+    <animate attributeName="x" values="-300;1200" dur="7s" repeatCount="indefinite"/>
+  </rect>
+</svg>

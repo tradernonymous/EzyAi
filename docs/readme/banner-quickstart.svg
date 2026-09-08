@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="90" viewBox="0 0 1200 90" role="img" aria-label="Quick start">
+  <title>Quick start</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#050816"/>
+      <stop offset="0.55" stop-color="#0b1030"/>
+      <stop offset="1" stop-color="#1a0b3a"/>
+    </linearGradient>
+    <linearGradient id="neon" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#22d3ee">
+        <animate attributeName="stop-color" values="#22d3ee;#a78bfa;#22d3ee" dur="9s" repeatCount="indefinite"/>
+      </stop>
+      <stop offset="0.5" stop-color="#8b5cf6"/>
+      <stop offset="1" stop-color="#f472b6">
+        <animate attributeName="stop-color" values="#f472b6;#22d3ee;#f472b6" dur="9s" repeatCount="indefinite"/>
+      </stop>
+    </linearGradient>
+    <radialGradient id="glowCyan" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#22d3ee" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#22d3ee" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowPink" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#f472b6" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#f472b6" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="faceTop" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1e2a5a"/>
+      <stop offset="1" stop-color="#2b1b5e"/>
+    </linearGradient>
+    <linearGradient id="faceLeft" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0f1a40"/>
+      <stop offset="1" stop-color="#070b22"/>
+    </linearGradient>
+    <linearGradient id="faceRight" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#151f4d"/>
+      <stop offset="1" stop-color="#0a0f2c"/>
+    </linearGradient>
+    <linearGradient id="sweep" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="3" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect x="1" y="1" width="1198" height="88" rx="22" fill="url(#bg)" stroke="url(#neon)" stroke-width="1.5"/>
+  <ellipse cx="90" cy="45" rx="160" ry="70" fill="url(#glowCyan)" opacity="0.7"/>
+  <ellipse cx="1120" cy="45" rx="180" ry="70" fill="url(#glowPink)" opacity="0.5"/>
+  <g transform="translate(34,23)" filter="url(#softGlow)"><path d="M26 2 L8 24 L20 24 L16 38 L36 14 L24 14 Z" fill="url(#neon)"/></g>
+  <text x="96" y="58" font-family="Segoe UI, Inter, Helvetica Neue, Helvetica, Arial, sans-serif" font-size="34" font-weight="700" letter-spacing="0.5" fill="url(#neon)" filter="url(#softGlow)">Quick start</text>
+  <rect x="0" y="0" width="220" height="90" fill="url(#sweep)">
+    <animate attributeName="x" values="-220;1200" dur="6s" repeatCount="indefinite"/>
+  </rect>
+</svg>
