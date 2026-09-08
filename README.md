@@ -345,6 +345,8 @@ Copy `.env.example` to `.env` for local runs. On Fly, set the same names with `f
 | `EZYAI_SITE_URL` | `https://printezy.money` | Website whose entitlement API the bot claims from |
 | `EZYAI_SITE_KEY` | — | Bearer key; must equal the website's `EZYAI_ENTITLEMENT_KEY`. Empty disables the bridge. |
 | `EZYAI_SITE_USERNAME_MATCH` | `true` | Also claim website purchases by Telegram username. Set false once the site issues codes. |
+| `EZYAI_SIGNAL_KEY` | — | Bearer key for the website's live signal board. Empty disables the board push. |
+| `EZYMAP_SITE_URL` | `https://printezy.money` | Host of the live signal board |
 | `SENTRY_DSN` | — | Error reporting; nothing is sent when empty |
 
 </details>
@@ -416,6 +418,7 @@ app/
   config.py               environment and infra config
   billing.py              plans, Stars invoices, Stripe checkout, USDT, discounts
   site_entitlements.py    claims PRO bought on the website (codes, usernames, sweep)
+  site_signals.py         mirrors autopilot signals onto the website's live board
   health.py               liveness beats behind GET /
   analysis/               indicators, levels, regime and session logic, strategy
   data/                   Binance / Yahoo / ccxt / synthetic providers, DataHub,

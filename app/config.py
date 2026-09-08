@@ -87,6 +87,17 @@ def site_key():
     return env("EZYAI_SITE_KEY", "")
 
 
+def signal_site_url():
+    """Website whose live signal board mirrors autopilot signals. Separate
+    from site_url(): the board is deployed with its own host variable."""
+    return env("EZYMAP_SITE_URL", "https://printezy.money")
+
+
+def signal_key():
+    """Bearer key for the website signal board. Empty = board off."""
+    return env("EZYAI_SIGNAL_KEY", "")
+
+
 def contact_email():
     """Operator contact for upstream APIs that require one (SEC EDGAR)."""
     return env("EZYAI_CONTACT_EMAIL", "")
